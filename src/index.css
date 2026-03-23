@@ -1,0 +1,118 @@
+@import "tailwindcss";
+@import "@solana/wallet-adapter-react-ui/styles.css";
+
+@theme {
+  --color-cream: var(--theme-cream);
+  --color-pearl: var(--theme-pearl);
+  --color-pearl-dark: var(--theme-pearl-dark);
+  --color-ink: var(--theme-ink);
+  --color-ink-light: var(--theme-ink-light);
+  --color-accent: var(--theme-accent);
+  --color-success: #10B981;
+  --color-danger: #EF4444;
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --theme-cream: #FFFEF7;
+  --theme-pearl: #F6F6F6;
+  --theme-pearl-dark: #E0E0E0;
+  --theme-ink: #111111;
+  --theme-ink-light: #555555;
+  --theme-accent: #000000;
+}
+
+.dark {
+  --theme-cream: #0F0F0F;
+  --theme-pearl: #1A1A1A;
+  --theme-pearl-dark: #2A2A2A;
+  --theme-ink: #F5F5F5;
+  --theme-ink-light: #A3A3A3;
+  --theme-accent: #FFFFFF;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Hide scrollbar globally for cleaner UI */
+::-webkit-scrollbar {
+  display: none;
+}
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--color-cream);
+  display: flex;
+  flex-direction: column;
+  transition: background-color 0.3s ease;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 28px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04);
+  transition: all 0.3s ease;
+}
+
+.dark .glass-card {
+  background: rgba(30, 30, 30, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.pearl-gradient {
+  background: linear-gradient(135deg, #FFFFFF 0%, #F0F0F0 100%);
+}
+
+.dark .pearl-gradient {
+  background: linear-gradient(135deg, #1A1A1A 0%, #0F0F0F 100%);
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom Wallet Button Styles */
+.wallet-adapter-button {
+  background-color: var(--color-ink) !important;
+  color: var(--color-cream) !important;
+  border-radius: 9999px !important;
+  font-family: var(--font-sans) !important;
+  font-weight: 500 !important;
+  height: 40px !important;
+  padding: 0 20px !important;
+  transition: all 0.2s ease !important;
+}
+.wallet-adapter-button:hover {
+  background-color: var(--color-ink-light) !important;
+}
+.wallet-adapter-dropdown-list {
+  background: var(--color-cream) !important;
+  border: 1px solid var(--color-pearl-dark) !important;
+  border-radius: 16px !important;
+  color: var(--color-ink) !important;
+}
+.wallet-adapter-dropdown-list-item:hover {
+  background: var(--color-pearl) !important;
+}
