@@ -4,15 +4,19 @@ import { MainFeed } from './screens/MainFeed';
 import { SettingsHub } from './screens/SettingsHub';
 import { ActivityScreen } from './screens/ActivityScreen';
 import { Logo } from './components/Logo';
-import { Home, Settings, Activity } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Home, Settings, Activity, FlaskConical } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { WalletContextProvider } from './components/WalletContextProvider';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { AppProvider } from './context/AppContext';
+import { AppProvider, useAppContext } from './context/AppContext';
+import { feedback } from './utils/feedback';
+import { TermsModal, UsernameModal } from './components/OnboardingModals';
+import { useWallet } from '@solana/wallet-adapter-react';
 
 const Navigation = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { isTestMode } = useAppContext();
 
   const navItems = [
     { path: '/', icon: Home, label: 'Markets' },
@@ -20,17 +24,24 @@ const Navigation = () => {
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 
+  const handleNav = (path: string) => {
+    if (location.pathname !== path) {
+      feedback.playClick();
+      navigate(path);
+    }
+  };
+
   return (
     <>
       {/* Mobile Bottom Navigation */}
-      <div className="md:hidden fixed bottom-6 left-6 right-6 glass-card p-2 flex justify-between items-center z-50">
+      <div className="lg:hidden fixed bottom-6 left-6 right-6 glass-card p-2 flex justify-between items-center z-50">
         {navItems.map((item) => {
           const isActive = location.pathname === item.path;
           const Icon = item.icon;
           return (
             <button
               key={item.path}
-              onClick={() => navigate(item.path)}
+              onClick={() => handleNav(item.path)}
               className="relative flex-1 py-3 flex flex-col items-center justify-center"
             >
               {isActive && (
@@ -54,10 +65,18 @@ const Navigation = () => {
       </div>
 
       {/* Desktop Sidebar Navigation */}
-      <div className="hidden md:flex flex-col w-64 h-screen sticky top-0 p-6 border-r border-pearl-dark/50">
+      <div className="hidden lg:flex flex-col w-64 h-screen sticky top-0 p-6 border-r border-pearl-dark/50">
         <div className="flex items-center gap-3 mb-12 px-4">
           <Logo className="w-10 h-10" />
-          <h1 className="text-2xl font-bold tracking-tight text-ink">SnapTap</h1>
+          <div className="flex flex-col">
+            <h1 className="text-2xl font-bold tracking-tight text-ink leading-tight">SnapTap</h1>
+            {isTestMode && (
+              <span className="text-[10px] font-bold text-warning flex items-center gap-1 mt-0.5">
+                <FlaskConical size={10} />
+                TEST MODE
+              </span>
+            )}
+          </div>
         </div>
         
         <nav className="flex flex-col gap-2 flex-1">
@@ -67,7 +86,7 @@ const Navigation = () => {
             return (
               <button
                 key={item.path}
-                onClick={() => navigate(item.path)}
+                onClick={() => handleNav(item.path)}
                 className="relative flex items-center gap-4 px-4 py-4 rounded-2xl transition-colors"
               >
                 {isActive && (
@@ -90,7 +109,7 @@ const Navigation = () => {
           })}
         </nav>
         
-        <div className="mt-auto">
+        <div className="mt-auto desktop-wallet">
           <WalletMultiButton />
         </div>
       </div>
@@ -99,14 +118,49 @@ const Navigation = () => {
 };
 
 const Header = () => {
+  const { isTestMode } = useAppContext();
   return (
-    <header className="px-6 py-5 flex justify-between items-center z-10 bg-cream/80 backdrop-blur-md sticky top-0 md:hidden">
+    <header className="px-6 py-5 flex justify-between items-center z-10 bg-cream/80 backdrop-blur-md sticky top-0 lg:hidden">
       <div className="flex items-center gap-3">
         <Logo className="w-8 h-8" />
-        <h1 className="text-xl font-bold tracking-tight text-ink">SnapTap</h1>
+        <div className="flex flex-col">
+          <h1 className="text-xl font-bold tracking-tight text-ink leading-tight">SnapTap</h1>
+          {isTestMode && (
+            <span className="text-[10px] font-bold text-warning flex items-center gap-1">
+              <FlaskConical size={10} />
+              TEST MODE
+            </span>
+          )}
+        </div>
       </div>
       <WalletMultiButton />
     </header>
+  );
+};
+
+const AppContent = () => {
+  const { hasAcceptedTerms, username } = useAppContext();
+  const { connected } = useWallet();
+
+  return (
+    <Router>
+      <AnimatePresence>
+        {!hasAcceptedTerms && <TermsModal />}
+        {hasAcceptedTerms && connected && !username && <UsernameModal />}
+      </AnimatePresence>
+      
+      <div className="flex flex-col lg:flex-row min-h-screen max-w-7xl mx-auto w-full">
+        <Navigation />
+        <main className="flex-1 pb-24 lg:pb-0 lg:px-8 max-w-3xl mx-auto w-full">
+          <Header />
+          <Routes>
+            <Route path="/" element={<MainFeed />} />
+            <Route path="/activity" element={<ActivityScreen />} />
+            <Route path="/settings" element={<SettingsHub />} />
+          </Routes>
+        </main>
+      </div>
+    </Router>
   );
 };
 
@@ -114,19 +168,7 @@ export default function App() {
   return (
     <AppProvider>
       <WalletContextProvider>
-        <Router>
-          <div className="flex flex-col md:flex-row min-h-screen max-w-7xl mx-auto w-full">
-            <Navigation />
-            <main className="flex-1 pb-24 md:pb-0 md:px-8 max-w-3xl mx-auto w-full">
-              <Header />
-              <Routes>
-                <Route path="/" element={<MainFeed />} />
-                <Route path="/activity" element={<ActivityScreen />} />
-                <Route path="/settings" element={<SettingsHub />} />
-              </Routes>
-            </main>
-          </div>
-        </Router>
+        <AppContent />
       </WalletContextProvider>
     </AppProvider>
   );

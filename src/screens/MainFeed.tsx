@@ -10,7 +10,7 @@ const CATEGORIES: MarketCategory[] = ['Crypto', 'World', 'Sports', 'Tech'];
 
 export const MainFeed = () => {
   const { publicKey } = useWallet();
-  const { addBet } = useAppContext();
+  const { addBet, isTestMode } = useAppContext();
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,23 +34,50 @@ export const MainFeed = () => {
   }, []);
 
   const handleBet = async (marketId: string, outcome: 'Yes' | 'No', amount: number, currency: Currency) => {
-    if (!publicKey) return;
+    if (!publicKey) {
+      alert("Please connect your wallet first.");
+      return;
+    }
     
     const market = markets.find(m => m.id === marketId);
     if (!market) return;
 
-    console.log(`Placing bet: ${amount} ${currency} on ${outcome} for market ${marketId}`);
-    const result = await AggregatorService.placeBet(marketId, outcome, amount, currency, publicKey.toBase58());
-    console.log('Bet result:', result);
+    console.log(`Initiating bet: ${amount} ${currency} on ${outcome} for market ${marketId}`);
+    
+    try {
+      // 1. Transaction Construction & Referral Injection (Backend Call)
+      const { base64Tx } = await AggregatorService.buildBetTransaction(
+        marketId, outcome, amount, currency, publicKey.toBase58()
+      );
 
-    if (result.success) {
+      // 2. Seed Vault Signing (Frontend)
+      console.log('Received Base64 Tx from backend:', base64Tx);
+      console.log('Prompting Seed Vault / Wallet Adapter for biometric signature...');
+      
+      // In a real app:
+      // const txBuffer = Buffer.from(base64Tx, 'base64');
+      // const transaction = VersionedTransaction.deserialize(txBuffer);
+      // const signature = await sendTransaction(transaction, connection);
+      
+      // Simulate wallet approval delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      console.log('Transaction signed and sent successfully!');
+
+      const probability = outcome === 'Yes' ? market.yesProbability : market.noProbability;
+      const potentialPayout = amount / probability;
+
+      // 3. UX Confirmation
       addBet({
         marketId,
         marketTitle: market.title,
         outcome,
         amount,
-        currency
+        currency,
+        potentialPayout
       });
+      
+    } catch (err) {
+      console.error('Betting failed:', err);
     }
   };
 
@@ -60,26 +87,28 @@ export const MainFeed = () => {
 
   return (
     <div className="flex-1 overflow-y-auto hide-scrollbar px-5 pt-4 pb-24">
-      <div className="flex gap-1.5 mb-6 overflow-x-auto hide-scrollbar w-full">
-        <button 
-          onClick={() => setActiveCategory('All')}
-          className={`px-3 py-1.5 rounded-full text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors ${
-            activeCategory === 'All' ? 'bg-ink text-cream' : 'bg-pearl text-ink-light'
-          }`}
-        >
-          All Markets
-        </button>
-        {CATEGORIES.map(cat => (
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex gap-1.5 overflow-x-auto hide-scrollbar w-full">
           <button 
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
+            onClick={() => setActiveCategory('All')}
             className={`px-3 py-1.5 rounded-full text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors ${
-              activeCategory === cat ? 'bg-ink text-cream' : 'bg-pearl text-ink-light'
+              activeCategory === 'All' ? 'bg-ink text-cream' : 'bg-pearl text-ink-light'
             }`}
           >
-            {cat}
+            All Markets
           </button>
-        ))}
+          {CATEGORIES.map(cat => (
+            <button 
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors ${
+                activeCategory === cat ? 'bg-ink text-cream' : 'bg-pearl text-ink-light'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">

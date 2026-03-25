@@ -1,23 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Currency, Market, AggregatorService } from '../services/AggregatorService';
 import { motion, AnimatePresence } from 'motion/react';
-import { Fingerprint, CheckCircle2, Loader2, X, Wallet } from 'lucide-react';
+import { Fingerprint, CheckCircle2, Loader2, X, Wallet, AlertTriangle } from 'lucide-react';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { feedback } from '../utils/feedback';
+import { useAppContext } from '../context/AppContext';
 
 interface MarketCardProps {
   market: Market;
   onBet: (marketId: string, outcome: 'Yes' | 'No', amount: number, currency: Currency) => Promise<void>;
 }
 
-const CURRENCIES: Currency[] = ['USDC', 'SOL', 'USDT', 'SKR'];
-
 export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
   const { connected, publicKey } = useWallet();
+  const { isTestMode, testBalance, addBet } = useAppContext();
   const [selectedOutcome, setSelectedOutcome] = useState<'Yes' | 'No' | null>(null);
   const [amount, setAmount] = useState<number>(100);
   const [currency, setCurrency] = useState<Currency>('USDC');
   const [isSigning, setIsSigning] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+
+  const CURRENCIES: Currency[] = isTestMode ? ['STcoin' as any] : ['USDC', 'SOL', 'USDT', 'SKR'];
+
+  useEffect(() => {
+    if (isTestMode) {
+      setCurrency('STcoin' as any);
+    } else {
+      setCurrency('USDC');
+    }
+  }, [isTestMode]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -29,6 +40,7 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
 
   const handleBetClick = (outcome: 'Yes' | 'No') => {
     if (isSigning || isSuccess) return;
+    feedback.playClick();
     setSelectedOutcome(outcome);
   };
 
@@ -38,16 +50,40 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
       alert("Please connect your wallet first.");
       return;
     }
+
+    if (isTestMode && amount > testBalance) {
+      feedback.playClick();
+      alert("Insufficient STcoin balance!");
+      return;
+    }
     
+    feedback.playClick();
     setIsSigning(true);
     
     // Simulate biometric delay / wallet approval
     await new Promise(resolve => setTimeout(resolve, 800));
     
-    await onBet(market.id, selectedOutcome, amount, currency);
+    if (isTestMode) {
+      // In test mode, we bypass the real onBet and just add it to context
+      const price = selectedOutcome === 'Yes' ? market.yesProbability : market.noProbability;
+      const potentialPayout = amount / price;
+      
+      addBet({
+        marketId: market.id,
+        marketTitle: market.title,
+        outcome: selectedOutcome,
+        amount,
+        currency: 'STcoin',
+        potentialPayout,
+        isTestBet: true
+      });
+    } else {
+      await onBet(market.id, selectedOutcome, amount, currency);
+    }
     
     setIsSigning(false);
     setIsSuccess(true);
+    feedback.playSuccess();
     
     setTimeout(() => {
       setIsSuccess(false);
@@ -56,16 +92,23 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
   };
 
   const targetCurrency = market.provider === 'Drift' ? 'USDC' : 'USDC';
-  const conversionRate = AggregatorService.getConversionRate(currency, targetCurrency as Currency);
+  const conversionRate = isTestMode ? 1 : AggregatorService.getConversionRate(currency, targetCurrency as Currency);
   const convertedAmount = amount * conversionRate;
 
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glass-card p-5 mb-4 w-full flex flex-col relative overflow-hidden"
+      className={`glass-card p-5 mb-4 w-full flex flex-col relative overflow-hidden ${isTestMode ? 'border-warning/30' : ''}`}
     >
-      <div className="flex justify-between items-center mb-3">
+      {isTestMode && (
+        <div className="absolute top-0 right-0 bg-warning text-cream text-[10px] font-bold px-3 py-1 rounded-bl-xl z-10 flex items-center gap-1">
+          <AlertTriangle size={10} />
+          TEST MODE
+        </div>
+      )}
+
+      <div className="flex justify-between items-center mb-3 mt-1">
         <span className="text-xs font-semibold tracking-wider uppercase text-ink-light bg-pearl px-2 py-1 rounded-md">
           {market.category}
         </span>
@@ -113,28 +156,34 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
       <AnimatePresence>
         {selectedOutcome && !isSuccess && (
           <motion.div 
-            initial={{ opacity: 0, y: '100%' }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: '100%' }}
-            className="absolute inset-0 bg-cream/95 backdrop-blur-md flex flex-col items-center justify-center z-10 rounded-[28px] p-6"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="w-full flex flex-col items-center justify-center z-20 mt-4 overflow-hidden"
           >
-            <button 
-              onClick={() => !isSigning && setSelectedOutcome(null)}
-              className="absolute top-4 right-4 text-ink-light p-2"
-            >
-              <X size={20} />
-            </button>
+            <div className="w-full bg-pearl/50 rounded-2xl p-4 border border-pearl-dark mb-4 shadow-sm relative">
+              <button 
+                onClick={() => {
+                  if (!isSigning) {
+                    feedback.playClick();
+                    setSelectedOutcome(null);
+                  }
+                }}
+                className="absolute top-2 right-2 text-ink-light p-1 hover:text-ink transition-colors"
+              >
+                <X size={16} />
+              </button>
 
-            <h4 className="text-lg font-semibold text-ink mb-4">Place Bet: {selectedOutcome}</h4>
-            
-            <div className="w-full max-w-xs bg-cream rounded-2xl p-4 border border-pearl-dark mb-6 shadow-sm">
-              <div className="flex justify-between items-center mb-2">
+              <div className="flex justify-between items-center mb-2 pr-6">
                 <label className="text-xs font-semibold text-ink-light uppercase tracking-wider">Amount</label>
                 <div className="flex gap-1">
                   {CURRENCIES.map(c => (
                     <button
                       key={c}
-                      onClick={() => setCurrency(c)}
+                      onClick={() => {
+                        feedback.playClick();
+                        setCurrency(c);
+                      }}
                       className={`text-[10px] px-2 py-1 rounded-md font-mono transition-colors ${
                         currency === c ? 'bg-ink text-cream' : 'bg-pearl text-ink-light hover:bg-pearl-dark'
                       }`}
@@ -156,19 +205,28 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
                 <span className="text-xl font-mono text-ink-light">{currency}</span>
               </div>
               
-              {currency !== targetCurrency && (
+              {!isTestMode && currency !== targetCurrency && (
                 <div className="mt-3 pt-3 border-t border-pearl-dark/50 flex justify-between items-center text-xs text-ink-light">
                   <span>Auto-converting for {market.provider}</span>
                   <span className="font-mono">≈ {convertedAmount.toFixed(2)} {targetCurrency}</span>
+                </div>
+              )}
+              
+              {isTestMode && (
+                <div className="mt-3 pt-3 border-t border-pearl-dark/50 flex justify-between items-center text-xs text-ink-light">
+                  <span>Test Balance</span>
+                  <span className={`font-mono ${amount > testBalance ? 'text-danger font-bold' : ''}`}>
+                    {testBalance.toFixed(2)} STcoin
+                  </span>
                 </div>
               )}
             </div>
             
             <button 
               onClick={handleSign}
-              disabled={isSigning || !connected}
-              className={`w-full max-w-xs py-4 rounded-full flex items-center justify-center gap-2 font-medium transition-all ${
-                connected 
+              disabled={isSigning || !connected || (isTestMode && amount > testBalance)}
+              className={`w-full py-4 rounded-full flex items-center justify-center gap-2 font-medium transition-all ${
+                connected && (!isTestMode || amount <= testBalance)
                   ? 'bg-ink text-cream hover:bg-ink-light shadow-lg' 
                   : 'bg-pearl-dark text-ink-light cursor-not-allowed'
               }`}
@@ -189,17 +247,21 @@ export const MarketCard: React.FC<MarketCardProps> = ({ market, onBet }) => {
             </button>
           </motion.div>
         )}
+      </AnimatePresence>
 
+      <AnimatePresence>
         {isSuccess && (
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-success/10 backdrop-blur-md flex flex-col items-center justify-center z-10 rounded-[28px] border border-success/20"
+            className="absolute inset-0 bg-success/10 backdrop-blur-md flex flex-col items-center justify-center z-20 rounded-[28px] border border-success/20"
           >
             <CheckCircle2 className="w-12 h-12 text-success mb-2" strokeWidth={1.5} />
             <p className="text-sm font-medium text-success">Bet Placed Successfully</p>
-            <p className="text-xs text-success/70 font-mono mt-1">Routed via {market.provider}</p>
+            <p className="text-xs text-success/70 font-mono mt-1">
+              {isTestMode ? 'Test Mode (STcoin)' : `Routed via ${market.provider}`}
+            </p>
           </motion.div>
         )}
       </AnimatePresence>
