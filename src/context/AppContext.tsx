@@ -43,50 +43,23 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const MOCK_INITIAL_BETS: Bet[] = [
-  {
-    id: 'mock-1',
-    marketId: 'jup-sol-eth-2026',
-    marketTitle: 'Solana to surpass Ethereum in daily active users by end of 2026?',
-    outcome: 'Yes',
-    amount: 50,
-    currency: 'USDC',
-    timestamp: Date.now() - 86400000 * 2,
-    status: 'Active',
-    potentialPayout: 90.9,
-    isTestBet: false,
-  },
-  {
-    id: 'mock-2',
-    marketId: 'jup-doge-1',
-    marketTitle: 'Dogecoin to reach $1 in 2026?',
-    outcome: 'No',
-    amount: 100,
-    currency: 'USDC',
-    timestamp: Date.now() - 86400000 * 5,
-    status: 'Won',
-    potentialPayout: 117.6,
-    isTestBet: false,
-  },
-  {
-    id: 'mock-test-1',
-    marketId: 'jup-apple-ar',
-    marketTitle: 'Apple to announce AR Glasses in WWDC 2026?',
-    outcome: 'Yes',
-    amount: 500,
-    currency: 'STcoin',
-    timestamp: Date.now() - 86400000 * 1,
-    status: 'Active',
-    potentialPayout: 1190.5,
-    isTestBet: true,
-  }
-];
+const MOCK_INITIAL_BETS: Bet[] = [];
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isDark, setIsDark] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const [bets, setBets] = useState<Bet[]>(MOCK_INITIAL_BETS);
+  const [bets, setBets] = useState<Bet[]>(() => {
+    const saved = localStorage.getItem('userBets');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  });
   
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(() => localStorage.getItem('termsAccepted') === 'true');
   const [username, setUsernameState] = useState<string | null>(() => localStorage.getItem('username'));
@@ -116,6 +89,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     localStorage.setItem('testBalance', testBalance.toString());
   }, [testBalance]);
+
+  useEffect(() => {
+    localStorage.setItem('userBets', JSON.stringify(bets));
+  }, [bets]);
 
   const toggleTheme = () => {
     feedback.playClick();

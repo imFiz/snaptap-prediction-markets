@@ -1,5 +1,14 @@
-export type MarketCategory = 'Crypto' | 'World' | 'Sports' | 'Tech';
+export type MarketCategory = string;
 export type Currency = 'SOL' | 'USDC' | 'USDT' | 'SKR';
+
+export interface MarketOption {
+  id: string;
+  title: string;
+  yesProbability: number;
+  noProbability: number;
+  status: 'active' | 'closed' | 'resolved';
+  resolution?: string | null;
+}
 
 export interface Market {
   id: string;
@@ -8,9 +17,10 @@ export interface Market {
   category: MarketCategory;
   poolSize: number;
   closingTime: string;
-  yesProbability: number;
-  noProbability: number;
-  resolved?: boolean;
+  status: 'active' | 'closed' | 'resolved';
+  rules: string;
+  imageUrl?: string | null;
+  options: MarketOption[];
 }
 
 // Mock conversion rates (1 unit to USDC)
@@ -37,10 +47,50 @@ export class AggregatorService {
         return await response.json();
       }
     } catch (error) {
-      console.error('Failed to fetch markets from backend:', error);
+      console.error('Failed to fetch markets from backend, using fallback:', error);
     }
     
-    return [];
+    // Fallback data in case the backend is unreachable (e.g., static hosting)
+    return [
+      {
+        id: 'jup-sol-eth-2026',
+        provider: 'Jupiter',
+        title: 'Solana to surpass Ethereum in daily active users by end of 2026?',
+        category: 'Crypto',
+        poolSize: 3400000,
+        closingTime: '2026-12-31T23:59:59Z',
+        status: 'active',
+        rules: 'This market resolves to Yes if Solana has more daily active users than Ethereum on December 31, 2026.',
+        options: [
+          {
+            id: 'opt-1',
+            title: 'Yes / No',
+            yesProbability: 0.55,
+            noProbability: 0.45,
+            status: 'active'
+          }
+        ]
+      },
+      {
+        id: 'jup-doge-1',
+        provider: 'Jupiter',
+        title: 'Dogecoin to reach $1 in 2026?',
+        category: 'Crypto',
+        poolSize: 5600000,
+        closingTime: '2026-12-31T23:59:59Z',
+        status: 'active',
+        rules: 'Resolves to Yes if Dogecoin hits $1.00 on any major exchange.',
+        options: [
+          {
+            id: 'opt-2',
+            title: 'Yes / No',
+            yesProbability: 0.15,
+            noProbability: 0.85,
+            status: 'active'
+          }
+        ]
+      }
+    ];
   }
 
   // Transaction Construction & Referral Injection
@@ -75,7 +125,7 @@ export class AggregatorService {
 
     } catch (error) {
       console.error('Failed to build transaction via backend:', error);
-      throw new Error('Transaction construction failed');
+      throw error;
     }
   }
 
@@ -84,13 +134,28 @@ export class AggregatorService {
     positionId: string,
     userPubkey: string
   ): Promise<{ base64Tx: string }> {
-    console.log(`[Frontend] Constructing claim/settle tx for position ${positionId}`);
+    console.log(`[Frontend] Requesting claim/settle tx from backend for position ${positionId}`);
     
-    // Simulate backend generating a Settle/Redeem transaction
-    const mockBase64Tx = btoa('mock_claim_transaction_data');
-    
-    return new Promise((resolve) => {
-      setTimeout(() => resolve({ base64Tx: mockBase64Tx }), 800);
-    });
+    try {
+      const response = await fetch('/api/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          positionId,
+          userPubkey
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Backend failed to construct claim transaction');
+      }
+
+      const data = await response.json();
+      return { base64Tx: data.base64Tx };
+
+    } catch (error) {
+      console.error('Failed to build claim transaction via backend:', error);
+      throw error;
+    }
   }
 }

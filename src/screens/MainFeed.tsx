@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { AggregatorService, Currency, Market, MarketCategory } from '../services/AggregatorService';
 import { MarketCard } from '../components/MarketCard';
 import { SkeletonLoader } from '../components/SkeletonLoader';
@@ -6,15 +6,19 @@ import { motion } from 'motion/react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAppContext } from '../context/AppContext';
 
-const CATEGORIES: MarketCategory[] = ['Crypto', 'World', 'Sports', 'Tech'];
-
 export const MainFeed = () => {
   const { publicKey } = useWallet();
   const { addBet, isTestMode } = useAppContext();
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeCategory, setActiveCategory] = useState<MarketCategory | 'All'>('All');
+  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [marketStatusFilter, setMarketStatusFilter] = useState<'active' | 'completed'>('active');
+
+  const categories = useMemo(() => {
+    const cats = new Set(markets.map(m => m.category));
+    return Array.from(cats).sort();
+  }, [markets]);
 
   useEffect(() => {
     const loadMarkets = async () => {
@@ -33,21 +37,29 @@ export const MainFeed = () => {
     loadMarkets();
   }, []);
 
-  const handleBet = async (marketId: string, outcome: 'Yes' | 'No', amount: number, currency: Currency) => {
+  const handleBet = async (eventId: string, optionId: string, outcome: 'Yes' | 'No', amount: number, currency: Currency) => {
     if (!publicKey) {
       alert("Please connect your wallet first.");
       return;
     }
     
-    const market = markets.find(m => m.id === marketId);
+    const market = markets.find(m => m.id === eventId);
     if (!market) return;
 
-    console.log(`Initiating bet: ${amount} ${currency} on ${outcome} for market ${marketId}`);
+    const option = market.options.find(o => o.id === optionId);
+    if (!option) return;
+
+    if (option.status !== 'active') {
+      alert("This option is no longer active.");
+      return;
+    }
+
+    console.log(`Initiating bet: ${amount} ${currency} on ${outcome} for option ${optionId}`);
     
     try {
       // 1. Transaction Construction & Referral Injection (Backend Call)
       const { base64Tx } = await AggregatorService.buildBetTransaction(
-        marketId, outcome, amount, currency, publicKey.toBase58()
+        optionId, outcome, amount, currency, publicKey.toBase58()
       );
 
       // 2. Seed Vault Signing (Frontend)
@@ -63,13 +75,13 @@ export const MainFeed = () => {
       await new Promise(resolve => setTimeout(resolve, 1500));
       console.log('Transaction signed and sent successfully!');
 
-      const probability = outcome === 'Yes' ? market.yesProbability : market.noProbability;
+      const probability = outcome === 'Yes' ? option.yesProbability : option.noProbability;
       const potentialPayout = amount / probability;
 
       // 3. UX Confirmation
       addBet({
-        marketId,
-        marketTitle: market.title,
+        marketId: optionId,
+        marketTitle: `${market.title} - ${option.title}`,
         outcome,
         amount,
         currency,
@@ -81,13 +93,37 @@ export const MainFeed = () => {
     }
   };
 
-  const filteredMarkets = activeCategory === 'All' 
-    ? markets 
-    : markets.filter(m => m.category === activeCategory);
+  const filteredMarkets = markets.filter(m => {
+    const matchesCategory = activeCategory === 'All' || m.category === activeCategory;
+    const isCompleted = m.status === 'closed' || m.status === 'resolved';
+    const matchesStatus = marketStatusFilter === 'active' ? m.status === 'active' : isCompleted;
+    return matchesCategory && matchesStatus;
+  });
 
   return (
     <div className="flex-1 overflow-y-auto hide-scrollbar px-5 pt-4 pb-24">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-4 mb-4">
+        {/* Status Toggle */}
+        <div className="flex bg-pearl rounded-full p-1 w-full max-w-xs mx-auto">
+          <button
+            onClick={() => setMarketStatusFilter('active')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-full transition-colors ${
+              marketStatusFilter === 'active' ? 'bg-ink text-cream shadow-sm' : 'text-ink-light'
+            }`}
+          >
+            Active
+          </button>
+          <button
+            onClick={() => setMarketStatusFilter('completed')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-full transition-colors ${
+              marketStatusFilter === 'completed' ? 'bg-ink text-cream shadow-sm' : 'text-ink-light'
+            }`}
+          >
+            History
+          </button>
+        </div>
+
+        {/* Category Filter */}
         <div className="flex gap-1.5 overflow-x-auto hide-scrollbar w-full">
           <button 
             onClick={() => setActiveCategory('All')}
@@ -97,7 +133,7 @@ export const MainFeed = () => {
           >
             All Markets
           </button>
-          {CATEGORIES.map(cat => (
+          {categories.map(cat => (
             <button 
               key={cat}
               onClick={() => setActiveCategory(cat)}
