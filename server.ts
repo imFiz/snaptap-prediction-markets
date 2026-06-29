@@ -8,13 +8,77 @@ const JUPITER_PREDICTION_API = 'https://api.jup.ag/prediction/v1'; // Target API
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 4005;
 
   app.use(express.json());
 
   // API routes FIRST
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // Create data directory for user persistence
+  const DATA_DIR = path.join(process.cwd(), "data");
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR);
+  }
+
+  app.post("/api/save-bets", (req, res) => {
+    const { wallet, bets } = req.body;
+    if (!wallet || !bets) {
+      return res.status(400).json({ error: "Missing wallet or bets" });
+    }
+    const safeWallet = wallet.replace(/[^a-zA-Z0-9]/g, "_");
+    const filePath = path.join(DATA_DIR, `bets_${safeWallet}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(bets, null, 2));
+    res.json({ success: true });
+  });
+
+  app.get("/api/load-bets", (req, res) => {
+    const { wallet } = req.query;
+    if (!wallet || typeof wallet !== "string") {
+      return res.status(400).json({ error: "Missing wallet parameter" });
+    }
+    const safeWallet = wallet.replace(/[^a-zA-Z0-9]/g, "_");
+    const filePath = path.join(DATA_DIR, `bets_${safeWallet}.json`);
+    if (fs.existsSync(filePath)) {
+      try {
+        const fileContent = fs.readFileSync(filePath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      } catch (e) {
+        return res.status(500).json({ error: "Failed to parse saved bets" });
+      }
+    }
+    res.json([]);
+  });
+
+  app.post("/api/save-balance", (req, res) => {
+    const { wallet, balance } = req.body;
+    if (!wallet || balance === undefined) {
+      return res.status(400).json({ error: "Missing wallet or balance" });
+    }
+    const safeWallet = wallet.replace(/[^a-zA-Z0-9]/g, "_");
+    const filePath = path.join(DATA_DIR, `balance_${safeWallet}.json`);
+    fs.writeFileSync(filePath, JSON.stringify({ balance }, null, 2));
+    res.json({ success: true });
+  });
+
+  app.get("/api/load-balance", (req, res) => {
+    const { wallet } = req.query;
+    if (!wallet || typeof wallet !== "string") {
+      return res.status(400).json({ error: "Missing wallet parameter" });
+    }
+    const safeWallet = wallet.replace(/[^a-zA-Z0-9]/g, "_");
+    const filePath = path.join(DATA_DIR, `balance_${safeWallet}.json`);
+    if (fs.existsSync(filePath)) {
+      try {
+        const fileContent = fs.readFileSync(filePath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      } catch (e) {
+        return res.status(500).json({ error: "Failed to parse saved balance" });
+      }
+    }
+    res.json({ balance: 1000 });
   });
 
   // Fetch Jupiter events on startup for debugging

@@ -1,10 +1,10 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { MainFeed } from './screens/MainFeed';
+import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { WorldCupScreen } from './screens/WorldCupScreen';
 import { SettingsHub } from './screens/SettingsHub';
 import { ActivityScreen } from './screens/ActivityScreen';
 import { Logo } from './components/Logo';
-import { Home, Settings, Activity, FlaskConical } from 'lucide-react';
+import { Settings, Activity, Trophy, FlaskConical } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { WalletContextProvider } from './components/WalletContextProvider';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
@@ -19,7 +19,7 @@ const Navigation = () => {
   const { isTestMode } = useAppContext();
 
   const navItems = [
-    { path: '/', icon: Home, label: 'Markets' },
+    { path: '/', icon: Trophy, label: 'World Cup' },
     { path: '/activity', icon: Activity, label: 'Activity' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
@@ -67,7 +67,7 @@ const Navigation = () => {
       {/* Desktop Sidebar Navigation */}
       <div className="hidden lg:flex flex-col w-64 h-screen sticky top-0 p-6 border-r border-pearl-dark/50">
         <div className="flex items-center gap-3 mb-12 px-4">
-          <Logo className="w-10 h-10" />
+          <Logo className="w-16 h-16" />
           <div className="flex flex-col">
             <h1 className="text-2xl font-bold tracking-tight text-ink leading-tight">SnapTap</h1>
             {isTestMode && (
@@ -122,7 +122,7 @@ const Header = () => {
   return (
     <header className="px-6 py-5 flex justify-between items-center z-10 bg-cream/80 backdrop-blur-md sticky top-0 lg:hidden">
       <div className="flex items-center gap-3">
-        <Logo className="w-8 h-8" />
+        <Logo className="w-14 h-14" />
         <div className="flex flex-col">
           <h1 className="text-xl font-bold tracking-tight text-ink leading-tight">SnapTap</h1>
           {isTestMode && (
@@ -145,8 +145,8 @@ const AppContent = () => {
   return (
     <Router>
       <AnimatePresence>
-        {!hasAcceptedTerms && <TermsModal />}
-        {hasAcceptedTerms && connected && !username && <UsernameModal />}
+        {!hasAcceptedTerms && <TermsModal key="terms" />}
+        {hasAcceptedTerms && connected && !username && <UsernameModal key="username" />}
       </AnimatePresence>
       
       <div className="flex flex-col lg:flex-row min-h-screen max-w-7xl mx-auto w-full">
@@ -154,9 +154,10 @@ const AppContent = () => {
         <main className="flex-1 pb-24 lg:pb-0 lg:px-8 max-w-3xl mx-auto w-full">
           <Header />
           <Routes>
-            <Route path="/" element={<MainFeed />} />
+            <Route path="/" element={<WorldCupScreen />} />
             <Route path="/activity" element={<ActivityScreen />} />
             <Route path="/settings" element={<SettingsHub />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>
@@ -166,10 +167,10 @@ const AppContent = () => {
 
 export default function App() {
   return (
-    <AppProvider>
-      <WalletContextProvider>
+    <WalletContextProvider>
+      <AppProvider>
         <AppContent />
-      </WalletContextProvider>
-    </AppProvider>
+      </AppProvider>
+    </WalletContextProvider>
   );
 }

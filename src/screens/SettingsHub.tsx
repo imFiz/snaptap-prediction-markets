@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Moon, Sun, Volume2, Vibrate, Shield, FileText, Wallet, X, FlaskConical, Plus } from 'lucide-react';
+import { Moon, Sun, Volume2, Vibrate, Shield, FileText, Wallet, X, FlaskConical, Plus, Edit2, Check } from 'lucide-react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useAppContext } from '../context/AppContext';
@@ -19,7 +19,12 @@ const Toggle = ({ active, onChange }: { active: boolean, onChange: () => void })
   </button>
 );
 
-const SettingRow = ({ icon: Icon, title, description, control }: any) => (
+const SettingRow = ({ icon: Icon, title, description, control }: {
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  title: string;
+  description?: string;
+  control: React.ReactNode;
+}) => (
   <div className="flex items-center justify-between py-4 border-b border-pearl-dark/30 last:border-0">
     <div className="flex items-center gap-4">
       <div className="w-10 h-10 rounded-full bg-pearl flex items-center justify-center text-ink">
@@ -61,11 +66,13 @@ export const SettingsHub = () => {
     isDark, toggleTheme, 
     soundEnabled, toggleSound, 
     vibrationEnabled, toggleVibration, 
-    username, userLevel,
+    username, setUsername, userLevel,
     isTestMode, toggleTestMode,
     testBalance, addTestBalance
   } = useAppContext();
   const [activeModal, setActiveModal] = useState<'privacy' | 'terms' | null>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [tempName, setTempName] = useState('');
 
   const openModal = (modal: 'privacy' | 'terms') => {
     feedback.playClick();
@@ -127,9 +134,52 @@ export const SettingsHub = () => {
             </div>
           </div>
           
-          <h2 className="text-xl font-bold text-ink mb-1 relative z-10">
-            {connected ? (username || 'Anonymous') : 'Not Connected'}
-          </h2>
+          {connected ? (
+            <div className="flex items-center gap-2 mb-1 relative z-10">
+              {isEditingName ? (
+                <div className="flex items-center bg-pearl rounded-full px-3 py-1">
+                  <input
+                    type="text"
+                    value={tempName}
+                    onChange={(e) => setTempName(e.target.value)}
+                    className="bg-transparent text-xl font-bold text-ink outline-none w-32"
+                    autoFocus
+                    maxLength={15}
+                  />
+                  <button 
+                    onClick={() => {
+                      setUsername(tempName.trim());
+                      setIsEditingName(false);
+                      feedback.playSuccess();
+                    }}
+                    className="ml-2 text-success hover:text-success/80"
+                  >
+                    <Check size={18} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <h2 className="text-xl font-bold text-ink">
+                    {username || 'Player'}
+                  </h2>
+                  <button 
+                    onClick={() => {
+                      setTempName(username || '');
+                      setIsEditingName(true);
+                      feedback.playClick();
+                    }}
+                    className="text-ink-light hover:text-ink transition-colors"
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <h2 className="text-xl font-bold text-ink mb-1 relative z-10">
+              Not Connected
+            </h2>
+          )}
           
           {connected ? (
             <div className="flex flex-col items-center w-full relative z-10">

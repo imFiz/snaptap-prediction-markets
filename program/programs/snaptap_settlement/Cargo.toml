@@ -1,0 +1,21 @@
+[package]
+name = "snaptap_settlement"
+version = "0.1.0"
+description = "SnapTap: trustless pari-mutuel World Cup prediction markets settled via CPI into TxLINE validate_stat"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "snaptap_settlement"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = "0.31.1"

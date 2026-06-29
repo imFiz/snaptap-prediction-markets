@@ -6,3 +6,34 @@ coverage/
 *.log
 .env*
 !.env.example
+wallet.json
+txodds_token.json
+
+# Anchor / Solana build artifacts
+target/
+.anchor/
+test-ledger/
+program/target/
+**/*.rs.bk
+
+# Local data / runtime
+data/
+jupiter_events.json
+
+# Repo junk (not part of the project) — anchored to root
+*.exe
+*.tar.gz
+/*.conf
+/*.cjs
+/tmp_*
+/test_*
+/ssh_*
+/upload_*
+/check*
+/deploy*
+/fix-*
+/register_txodds.ts
+/gg_*
+/portfolio_*
+/claude-session.jsonl
+/skills/

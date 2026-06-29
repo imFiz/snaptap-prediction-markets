@@ -114,6 +114,74 @@ class FeedbackEngine {
       
     } catch (e) {}
   }
+
+  playGoalCelebration() {
+    if (this.vibrationEnabled && navigator.vibrate) {
+      navigator.vibrate([100, 50, 100, 50, 300]);
+    }
+    if (!this.soundEnabled) return;
+
+    try {
+      const ctx = this.getContext();
+      const now = ctx.currentTime;
+
+      // Whistle: 3 consecutive short high-pitch blasts
+      for (let j = 0; j < 3; j++) {
+        const startTime = now + j * 0.25;
+        const duration = 0.18;
+
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(2000, startTime);
+        osc.frequency.linearRampToValueAtTime(2200, startTime + duration * 0.5);
+        osc.frequency.linearRampToValueAtTime(1800, startTime + duration);
+
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.12, startTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      }
+
+      // Crowd Roar (White Noise) starting at second blast
+      const bufferSize = ctx.sampleRate * 2.0; // 2 seconds
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const noiseNode = ctx.createBufferSource();
+      noiseNode.buffer = buffer;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(350, now);
+      filter.Q.setValueAtTime(1.0, now);
+      filter.frequency.exponentialRampToValueAtTime(700, now + 0.8);
+      filter.frequency.exponentialRampToValueAtTime(300, now + 2.0);
+
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0, now);
+      noiseGain.gain.linearRampToValueAtTime(0.18, now + 0.4); 
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 2.0); 
+
+      noiseNode.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(ctx.destination);
+
+      noiseNode.start(now + 0.1);
+      noiseNode.stop(now + 2.0);
+
+    } catch (e) {
+      console.error("Goal celebration sound failed", e);
+    }
+  }
 }
 
 export const feedback = new FeedbackEngine();
