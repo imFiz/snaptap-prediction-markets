@@ -1,30 +1,201 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+import nacl from "tweetnacl";
+import bs58 from "bs58";
 
-const JUPITER_REFERRAL_ACCOUNT = 'AJdZhryzpDMmnSM7ymLVSJuBP1ARYfoiq1YMPXtsVj63';
-const JUPITER_PREDICTION_API = 'https://api.jup.ag/prediction/v1'; // Target API
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const PORT = 4005;
+const TXLINE_API_BASE =
+  process.env.TXLINE_API_BASE || "https://txline.txodds.com";
+const SESSION_SECRET = process.env.SESSION_SECRET || "dev-secret";
+
+// NOTE: on-chain positions are the real source of truth for user balances.
+// The JSON-file endpoints below are kept for test-mode / demo only.
+
+// ---------------------------------------------------------------------------
+// TxLINE guest-JWT cache
+// ---------------------------------------------------------------------------
+
+interface JwtCache {
+  token: string;
+  fetchedAt: number;
+}
+
+let jwtCache: JwtCache | null = null;
+const JWT_TTL_MS = 25 * 60 * 1000; // refresh after 25 minutes
+
+async function getGuestJwt(): Promise<string> {
+  if (jwtCache && Date.now() - jwtCache.fetchedAt < JWT_TTL_MS) {
+    return jwtCache.token;
+  }
+
+  const res = await fetch(`${TXLINE_API_BASE}/auth/guest/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`TxLINE guest auth failed (${res.status}): ${body}`);
+  }
+
+  const data = (await res.json()) as { token: string };
+  if (!data.token) throw new Error("TxLINE guest auth: missing token in response");
+
+  jwtCache = { token: data.token, fetchedAt: Date.now() };
+  return data.token;
+}
+
+/**
+ * Returns headers required for every TxLINE data request.
+ * The API token is read from env and NEVER forwarded to the browser.
+ */
+async function txlineHeaders(): Promise<Record<string, string>> {
+  const jwt = await getGuestJwt();
+  const apiToken =
+    process.env.TXODDS_API_TOKEN || process.env.VITE_TXODDS_API_TOKEN || "";
+  return {
+    Authorization: `Bearer ${jwt}`,
+    "X-Api-Token": apiToken,
+    Accept: "application/json",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Nonce store for wallet-signature auth
+// ---------------------------------------------------------------------------
+
+interface NonceEntry {
+  nonce: string;
+  message: string;
+  expiresAt: number;
+}
+
+const nonces = new Map<string, NonceEntry>();
+const NONCE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function pruneNonces() {
+  const now = Date.now();
+  for (const [key, entry] of nonces) {
+    if (now > entry.expiresAt) nonces.delete(key);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Stateless session token. Format: `<hmac>.<expMs>.<pubkey>`
+ * The HMAC over `pubkey.expMs` lets us verify without a session store.
+ */
+function issueSessionToken(pubkey: string): string {
+  const expMs = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+  const payload = `${pubkey}.${expMs}`;
+  const hmac = crypto
+    .createHmac("sha256", SESSION_SECRET)
+    .update(payload)
+    .digest("hex");
+  return `${hmac}.${expMs}.${pubkey}`;
+}
+
+function validateSessionToken(token: string): string | null {
+  const parts = token.split(".");
+  // format: <64-char hex hmac> . <expMs> . <pubkey>  (pubkey may contain dots in theory — use last two splits)
+  if (parts.length < 3) return null;
+  const hmac = parts[0];
+  const expMs = Number(parts[1]);
+  const pubkey = parts.slice(2).join(".");
+  if (!expMs || Date.now() > expMs) return null;
+  const expected = crypto
+    .createHmac("sha256", SESSION_SECRET)
+    .update(`${pubkey}.${expMs}`)
+    .digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(hmac), Buffer.from(expected))) return null;
+  return pubkey;
+}
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// ---------------------------------------------------------------------------
+
+declare module "express-serve-static-core" {
+  interface Request {
+    pubkey?: string;
+  }
+}
+
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  if (!cookieHeader) return {};
+  return Object.fromEntries(
+    cookieHeader.split(";").map((pair) => {
+      const idx = pair.indexOf("=");
+      if (idx === -1) return [pair.trim(), ""];
+      return [pair.slice(0, idx).trim(), decodeURIComponent(pair.slice(idx + 1).trim())];
+    })
+  );
+}
+
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // Check cookie first, then Authorization header
+  const cookies = parseCookies(req.headers.cookie);
+  let token = cookies["snaptap_session"];
+
+  if (!token) {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.slice(7);
+    }
+  }
+
+  if (!token) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+
+  const pubkey = validateSessionToken(token);
+  if (!pubkey) {
+    res.status(401).json({ error: "Invalid or expired session" });
+    return;
+  }
+
+  req.pubkey = pubkey;
+  next();
+}
+
+// ---------------------------------------------------------------------------
+// Server bootstrap
+// ---------------------------------------------------------------------------
 
 async function startServer() {
   const app = express();
-  const PORT = 4005;
-
   app.use(express.json());
 
-  // API routes FIRST
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  // -------------------------------------------------------------------------
+  // /api/health
+  // -------------------------------------------------------------------------
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", program: "Fg8kWSCZPGjvFWzxEx4J7u5kxKFGBf3oT2akJfri4Yae" });
   });
 
-  // Create data directory for user persistence
+  // -------------------------------------------------------------------------
+  // Persistence (test-mode; on-chain is the real source of truth)
+  // -------------------------------------------------------------------------
+
   const DATA_DIR = path.join(process.cwd(), "data");
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR);
   }
 
   app.post("/api/save-bets", (req, res) => {
-    const { wallet, bets } = req.body;
+    const { wallet, bets } = req.body as { wallet?: string; bets?: unknown };
     if (!wallet || !bets) {
       return res.status(400).json({ error: "Missing wallet or bets" });
     }
@@ -45,7 +216,7 @@ async function startServer() {
       try {
         const fileContent = fs.readFileSync(filePath, "utf-8");
         return res.json(JSON.parse(fileContent));
-      } catch (e) {
+      } catch {
         return res.status(500).json({ error: "Failed to parse saved bets" });
       }
     }
@@ -53,7 +224,7 @@ async function startServer() {
   });
 
   app.post("/api/save-balance", (req, res) => {
-    const { wallet, balance } = req.body;
+    const { wallet, balance } = req.body as { wallet?: string; balance?: number };
     if (!wallet || balance === undefined) {
       return res.status(400).json({ error: "Missing wallet or balance" });
     }
@@ -74,290 +245,211 @@ async function startServer() {
       try {
         const fileContent = fs.readFileSync(filePath, "utf-8");
         return res.json(JSON.parse(fileContent));
-      } catch (e) {
+      } catch {
         return res.status(500).json({ error: "Failed to parse saved balance" });
       }
     }
     res.json({ balance: 1000 });
   });
 
-  // Fetch Jupiter events on startup for debugging
-  try {
-    let allEvents: any[] = [];
-    let start = 0;
-    const maxPages = 10; // Fetch up to 100 events for debugging
-    
-    for (let i = 0; i < maxPages; i++) {
-      const response = await fetch(`https://api.jup.ag/prediction/v1/events?start=${start}`);
-      if (!response.ok) break;
-      const data = await response.json();
-      if (data && data.data) {
-        allEvents = allEvents.concat(data.data);
-      }
-      if (!data.pagination?.hasNext) break;
-      start += 10;
+  // -------------------------------------------------------------------------
+  // Auth: nonce + verify
+  // -------------------------------------------------------------------------
+
+  app.post("/api/auth/nonce", (req, res) => {
+    pruneNonces();
+    const { pubkey } = req.body as { pubkey?: string };
+    if (!pubkey || typeof pubkey !== "string") {
+      return res.status(400).json({ error: "Missing pubkey" });
     }
-    
-    fs.writeFileSync('jupiter_events.json', JSON.stringify({ data: allEvents }, null, 2));
-    console.log(`Jupiter Events written to jupiter_events.json (${allEvents.length} events)`);
-  } catch (err) {
-    console.error('Failed to fetch Jupiter events:', err);
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const message = `SnapTap login: ${nonce}`;
+    nonces.set(pubkey, {
+      nonce,
+      message,
+      expiresAt: Date.now() + NONCE_TTL_MS,
+    });
+    res.json({ nonce, message });
+  });
+
+  app.post("/api/auth/verify", (req, res) => {
+    const { pubkey, signature } = req.body as { pubkey?: string; signature?: string };
+    if (!pubkey || !signature) {
+      return res.status(400).json({ error: "Missing pubkey or signature" });
+    }
+
+    const entry = nonces.get(pubkey);
+    if (!entry || Date.now() > entry.expiresAt) {
+      return res.status(401).json({ error: "Nonce expired or not found — request a new one" });
+    }
+
+    try {
+      const messageBytes = new TextEncoder().encode(entry.message);
+      const sigBytes = bs58.decode(signature);
+      const pubkeyBytes = bs58.decode(pubkey);
+
+      const valid = nacl.sign.detached.verify(messageBytes, sigBytes, pubkeyBytes);
+      if (!valid) {
+        return res.status(401).json({ error: "Signature verification failed" });
+      }
+    } catch (err) {
+      return res.status(400).json({ error: "Invalid signature or pubkey encoding" });
+    }
+
+    // Consume nonce
+    nonces.delete(pubkey);
+
+    const token = issueSessionToken(pubkey);
+
+    // httpOnly cookie (SameSite=Strict)
+    const cookieMaxAge = 7 * 24 * 60 * 60; // 7 days in seconds
+    res.setHeader(
+      "Set-Cookie",
+      `snaptap_session=${token}; HttpOnly; SameSite=Strict; Max-Age=${cookieMaxAge}; Path=/`
+    );
+
+    res.json({ token, pubkey });
+  });
+
+  // -------------------------------------------------------------------------
+  // TxLINE proxy endpoints (public read — no auth required)
+  // -------------------------------------------------------------------------
+
+  // GET /api/txline/fixtures -> /api/fixtures/snapshot
+  app.get("/api/txline/fixtures", async (_req, res) => {
+    try {
+      const headers = await txlineHeaders();
+      const upstream = await fetch(`${TXLINE_API_BASE}/api/fixtures/snapshot`, { headers });
+      const body = await upstream.json();
+      if (!upstream.ok) {
+        return res.status(upstream.status).json(body);
+      }
+      res.json(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+    }
+  });
+
+  // GET /api/txline/odds/:fixtureId -> /api/odds/snapshot/:fixtureId
+  app.get("/api/txline/odds/:fixtureId", async (req, res) => {
+    try {
+      const { fixtureId } = req.params;
+      const headers = await txlineHeaders();
+      const upstream = await fetch(
+        `${TXLINE_API_BASE}/api/odds/snapshot/${fixtureId}`,
+        { headers }
+      );
+      const body = await upstream.json();
+      if (!upstream.ok) {
+        return res.status(upstream.status).json(body);
+      }
+      res.json(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+    }
+  });
+
+  // GET /api/txline/stat-validation -> /api/scores/stat-validation
+  // Used by the frontend to build the on-chain `resolve` transaction.
+  // Query params forwarded: fixtureId, seq, statKey, statKey2
+  app.get("/api/txline/stat-validation", async (req, res) => {
+    try {
+      const { fixtureId, seq, statKey, statKey2 } = req.query as Record<string, string | undefined>;
+      const params = new URLSearchParams();
+      if (fixtureId) params.set("fixtureId", fixtureId);
+      if (seq) params.set("seq", seq);
+      if (statKey) params.set("statKey", statKey);
+      if (statKey2) params.set("statKey2", statKey2);
+
+      const headers = await txlineHeaders();
+      const upstream = await fetch(
+        `${TXLINE_API_BASE}/api/scores/stat-validation?${params.toString()}`,
+        { headers }
+      );
+      const body = await upstream.json();
+      if (!upstream.ok) {
+        return res.status(upstream.status).json(body);
+      }
+      res.json(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // TxLINE SSE passthrough streams
+  // Upstream paths confirmed from streaming.md:
+  //   /api/odds/stream   (odds updates)
+  //   /api/scores/stream (score updates)
+  // -------------------------------------------------------------------------
+
+  async function ssePassthrough(upstreamPath: string, req: Request, res: Response) {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    let controller: AbortController | null = new AbortController();
+    req.on("close", () => {
+      controller?.abort();
+      controller = null;
+    });
+
+    try {
+      const headers = await txlineHeaders();
+      const upstream = await fetch(`${TXLINE_API_BASE}${upstreamPath}`, {
+        headers: {
+          ...headers,
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+        signal: controller.signal,
+      });
+
+      if (!upstream.ok || !upstream.body) {
+        res.write(`event: error\ndata: ${JSON.stringify({ status: upstream.status })}\n\n`);
+        res.end();
+        return;
+      }
+
+      const reader = upstream.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        res.write(chunk);
+        // Flush if supported
+        if (typeof (res as unknown as { flush?: () => void }).flush === "function") {
+          (res as unknown as { flush: () => void }).flush();
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.write(`event: error\ndata: ${JSON.stringify({ detail: msg })}\n\n`);
+      }
+    } finally {
+      res.end();
+    }
   }
 
-  // Cache for Jupiter API responses
-  let cachedMarkets: any = null;
-  let lastCacheTime = 0;
-  const CACHE_TTL = 60 * 1000; // 1 minute
-
-  // 1. Workflow: Betting & Referral Injection (Input) - API Data Fetching
-  app.get("/api/markets", async (req, res) => {
-    if (cachedMarkets && Date.now() - lastCacheTime < CACHE_TTL) {
-      return res.json(cachedMarkets);
-    }
-    
-    try {
-      // Attempt to fetch from Jupiter Prediction Markets API
-      // The API only returns 10 events per request, so we need to paginate
-      let allEvents: any[] = [];
-      let start = 0;
-      const maxPages = 20; // Fetch up to 200 events to provide a good variety
-      
-      // Fetch pages concurrently in batches to speed up
-      const batchSize = 5;
-      for (let i = 0; i < maxPages; i += batchSize) {
-        const promises = [];
-        for (let j = 0; j < batchSize; j++) {
-          promises.push(fetch(`https://api.jup.ag/prediction/v1/events?start=${start + j * 10}`).then(r => r.ok ? r.json() : null));
-        }
-        
-        const results = await Promise.all(promises);
-        let hasNext = false;
-        
-        for (const data of results) {
-          if (data && data.data) {
-            allEvents = allEvents.concat(data.data);
-            if (data.pagination?.hasNext) hasNext = true;
-          }
-        }
-        
-        if (!hasNext) break;
-        start += batchSize * 10;
-        
-        // Add a small delay between batches to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-      
-      if (allEvents.length > 0) {
-        // Normalize response to Snaptap format
-        const normalized = [];
-        
-        const now = Date.now() / 1000; // Current time in seconds
-
-        for (const event of allEvents) {
-            // Only include active events (or events that have markets)
-            if (!event.markets || event.markets.length === 0) continue;
-            
-            const options = [];
-            let eventStatus: 'active' | 'closed' | 'resolved' = 'closed';
-            let eventPoolSize = parseFloat(event.volumeUsd || '0') / 1000000;
-            let maxCloseTime = 0;
-            
-            for (const market of event.markets) {
-              // Calculate probabilities from pricing (microUSD)
-              let yesProbability = 0.5;
-              let noProbability = 0.5;
-              
-              if (market.pricing) {
-                yesProbability = (market.pricing.buyYesPriceUsd ?? 500000) / 1000000;
-                noProbability = (market.pricing.buyNoPriceUsd ?? 500000) / 1000000;
-              }
-
-              const yesProbPercent = Math.round(yesProbability * 100);
-              const noProbPercent = Math.round(noProbability * 100);
-
-              // Determine status
-              let status: 'active' | 'closed' | 'resolved' = 'active';
-              if (market.status === 'resolved' || market.status === 'voided') {
-                status = 'resolved';
-              } else if (market.status === 'closed' || (market.closeTime && market.closeTime < now) || yesProbPercent === 0 || yesProbPercent === 100) {
-                status = 'closed';
-              } else if (market.status === 'open') {
-                status = 'active';
-              } else {
-                status = 'closed';
-              }
-              
-              if (status === 'active') eventStatus = 'active';
-              if (status === 'resolved' && eventStatus !== 'active') eventStatus = 'resolved';
-              
-              if (market.closeTime > maxCloseTime) {
-                maxCloseTime = market.closeTime;
-              }
-              
-              options.push({
-                id: market.marketId,
-                title: market.title || 'Yes / No',
-                yesProbability: yesProbPercent,
-                noProbability: noProbPercent,
-                status,
-                resolution: market.result
-              });
-            }
-            
-            if (options.length === 0) continue;
-            
-            const eventTitle = event.metadata?.title || event.title || 'Unknown Event';
-            const categoryLabel = event.category ? event.category.charAt(0).toUpperCase() + event.category.slice(1) : 'Other';
-            
-            normalized.push({
-              id: event.eventId,
-              provider: 'Jupiter',
-              title: eventTitle,
-              category: categoryLabel,
-              poolSize: eventPoolSize,
-              closingTime: maxCloseTime > 0 ? new Date(maxCloseTime * 1000).toISOString() : new Date().toISOString(),
-              status: eventStatus,
-              rules: event.markets[0]?.rulesPrimary || event.closeCondition || 'No rules provided.',
-              imageUrl: event.metadata?.imageUrl || event.markets[0]?.imageUrl || null,
-              options: options
-            });
-        }
-        
-        cachedMarkets = normalized;
-        lastCacheTime = Date.now();
-        return res.json(normalized);
-      }
-    } catch (error) {
-      console.warn('Jupiter Prediction API unreachable, using cached/fallback markets.');
-    }
-
-    // Fallback data in case the Jupiter Prediction API is unreachable
-    res.json([
-      {
-        id: 'jup-sol-eth-2026',
-        provider: 'Jupiter',
-        title: 'Solana to surpass Ethereum in daily active users by end of 2026?',
-        category: 'Crypto',
-        poolSize: 3400000,
-        closingTime: '2026-12-31T23:59:59Z',
-        status: 'active',
-        rules: 'This market resolves to Yes if Solana has more daily active users than Ethereum on December 31, 2026.',
-        options: [
-          {
-            id: 'opt-1',
-            title: 'Yes / No',
-            yesProbability: 55,
-            noProbability: 45,
-            status: 'active'
-          }
-        ]
-      },
-      {
-        id: 'jup-doge-1',
-        provider: 'Jupiter',
-        title: 'Dogecoin to reach $1 in 2026?',
-        category: 'Crypto',
-        poolSize: 5600000,
-        closingTime: '2026-12-31T23:59:59Z',
-        status: 'active',
-        rules: 'Resolves to Yes if Dogecoin hits $1.00 on any major exchange.',
-        options: [
-          {
-            id: 'opt-2',
-            title: 'Yes / No',
-            yesProbability: 15,
-            noProbability: 85,
-            status: 'active'
-          }
-        ]
-      }
-    ]);
+  app.get("/api/txline/stream/scores", (req, res) => {
+    ssePassthrough("/api/scores/stream", req, res).catch(() => res.end());
   });
 
-  // 1. Workflow: Transaction Construction & Referral Injection
-  app.post("/api/bet", async (req, res) => {
-    const { marketId, outcome, amount, userPubkey } = req.body;
-
-    if (!marketId || !outcome || !amount || !userPubkey) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    console.log(`[Backend] Constructing bet for ${marketId} - Outcome: ${outcome}`);
-    console.log(`[Backend] Injecting Referral Key: ${JUPITER_REFERRAL_ACCOUNT}`);
-
-    try {
-      // Call the real Jupiter Prediction API to build the transaction
-      const response = await fetch('https://api.jup.ag/prediction/v1/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ownerPubkey: userPubkey,
-          marketId: marketId,
-          isYes: outcome === 'Yes',
-          isBuy: true,
-          depositAmount: Math.floor(amount * 1_000_000), // Convert to micro-units (assuming USDC)
-          depositMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC mint
-          referralAccount: JUPITER_REFERRAL_ACCOUNT, // Inject referral
-          feeAccount: JUPITER_REFERRAL_ACCOUNT
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Jupiter API Error:', errorText);
-        return res.status(response.status).json({ error: 'Failed to construct transaction from Jupiter API', details: errorText });
-      }
-
-      const data = await response.json();
-      
-      // The API should return a base64 encoded transaction (usually in data.transaction or data.swapTransaction)
-      const base64Tx = data.transaction || data.swapTransaction || data.tx || Buffer.from(JSON.stringify(data)).toString('base64');
-      
-      return res.json({ base64Tx });
-    } catch (error) {
-      console.error('Failed to build transaction:', error);
-      res.status(500).json({ error: 'Transaction construction failed' });
-    }
+  app.get("/api/txline/stream/odds", (req, res) => {
+    ssePassthrough("/api/odds/stream", req, res).catch(() => res.end());
   });
 
-  // 2. Workflow: Monitoring & Payout (Output) - Claim Transaction
-  app.post("/api/claim", async (req, res) => {
-    const { positionId, userPubkey } = req.body;
+  // -------------------------------------------------------------------------
+  // Vite dev middleware / static serving (keep at bottom)
+  // -------------------------------------------------------------------------
 
-    if (!positionId || !userPubkey) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    console.log(`[Backend] Constructing claim tx for position ${positionId}`);
-
-    try {
-      // Call the real Jupiter Prediction API to build the claim transaction
-      const response = await fetch(`https://api.jup.ag/prediction/v1/payouts/${positionId}/claim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ownerPubkey: userPubkey
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Jupiter API Error (Claim):', errorText);
-        return res.status(response.status).json({ error: 'Failed to construct claim transaction', details: errorText });
-      }
-
-      const data = await response.json();
-      
-      const base64Tx = data.transaction || data.swapTransaction || data.tx || Buffer.from(JSON.stringify(data)).toString('base64');
-      
-      return res.json({ base64Tx });
-    } catch (error) {
-      console.error('Failed to build claim transaction:', error);
-      res.status(500).json({ error: 'Claim transaction construction failed' });
-    }
-  });
-
-  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -365,15 +457,17 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`SnapTap server running on http://localhost:${PORT}`);
+    console.log(`TxLINE API base: ${TXLINE_API_BASE}`);
+    console.log(`Program: Fg8kWSCZPGjvFWzxEx4J7u5kxKFGBf3oT2akJfri4Yae`);
   });
 }
 
