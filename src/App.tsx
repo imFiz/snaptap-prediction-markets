@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { WorldCupScreen } from './screens/WorldCupScreen';
 import { SettingsHub } from './screens/SettingsHub';
 import { ActivityScreen } from './screens/ActivityScreen';
 import { Logo } from './components/Logo';
-import { Settings, Activity, Trophy, FlaskConical } from 'lucide-react';
+import { Settings, Activity, Trophy, FlaskConical, Droplets } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { WalletContextProvider } from './components/WalletContextProvider';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
@@ -12,6 +12,63 @@ import { AppProvider, useAppContext } from './context/AppContext';
 import { feedback } from './utils/feedback';
 import { TermsModal, UsernameModal } from './components/OnboardingModals';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useStakeBalance } from './lib/useStakeBalance';
+
+const DesktopWalletPanel = () => {
+  const { isTestMode } = useAppContext();
+  const { connected, publicKey } = useWallet();
+  const { balance, refresh } = useStakeBalance();
+  const [faucetLoading, setFaucetLoading] = useState(false);
+  const [faucetMsg, setFaucetMsg] = useState<string | null>(null);
+
+  const handleFaucet = async () => {
+    if (!publicKey || faucetLoading) return;
+    setFaucetLoading(true);
+    setFaucetMsg(null);
+    try {
+      const res = await fetch('/api/faucet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: publicKey.toString() }),
+      });
+      if (res.status === 429) {
+        setFaucetMsg('Faucet cooldown');
+      } else if (res.ok) {
+        setFaucetMsg('1000 demo-USDC sent!');
+        setTimeout(refresh, 2000);
+      } else {
+        setFaucetMsg('Faucet error');
+      }
+    } catch {
+      setFaucetMsg('Network error');
+    }
+    setFaucetLoading(false);
+    setTimeout(() => setFaucetMsg(null), 4000);
+  };
+
+  return (
+    <div className="mt-auto desktop-wallet flex flex-col gap-2">
+      {connected && !isTestMode && (
+        <div className="flex items-center justify-between px-1">
+          <span className="text-xs font-mono text-ink-light">{balance.toFixed(2)} USDC</span>
+          <button
+            onClick={handleFaucet}
+            disabled={faucetLoading}
+            title="Get 1000 demo-USDC"
+            className="p-1.5 rounded-full bg-pearl hover:bg-pearl-dark text-ink-light hover:text-ink transition-colors disabled:opacity-40 flex items-center gap-1 text-xs"
+          >
+            <Droplets size={14} />
+            Faucet
+          </button>
+        </div>
+      )}
+      {faucetMsg && (
+        <p className="text-[10px] text-ink-light text-center">{faucetMsg}</p>
+      )}
+      <WalletMultiButton />
+    </div>
+  );
+};
 
 const Navigation = () => {
   const navigate = useNavigate();
@@ -109,9 +166,7 @@ const Navigation = () => {
           })}
         </nav>
         
-        <div className="mt-auto desktop-wallet">
-          <WalletMultiButton />
-        </div>
+        <DesktopWalletPanel />
       </div>
     </>
   );
@@ -119,6 +174,36 @@ const Navigation = () => {
 
 const Header = () => {
   const { isTestMode } = useAppContext();
+  const { connected, publicKey } = useWallet();
+  const { balance, refresh } = useStakeBalance();
+  const [faucetLoading, setFaucetLoading] = useState(false);
+  const [faucetMsg, setFaucetMsg] = useState<string | null>(null);
+
+  const handleFaucet = async () => {
+    if (!publicKey || faucetLoading) return;
+    setFaucetLoading(true);
+    setFaucetMsg(null);
+    try {
+      const res = await fetch('/api/faucet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: publicKey.toString() }),
+      });
+      if (res.status === 429) {
+        setFaucetMsg('Faucet cooldown — try again later');
+      } else if (res.ok) {
+        setFaucetMsg('1000 demo-USDC sent!');
+        setTimeout(refresh, 2000);
+      } else {
+        setFaucetMsg('Faucet error, try again');
+      }
+    } catch {
+      setFaucetMsg('Network error');
+    }
+    setFaucetLoading(false);
+    setTimeout(() => setFaucetMsg(null), 4000);
+  };
+
   return (
     <header className="px-6 py-5 flex justify-between items-center z-10 bg-cream/80 backdrop-blur-md sticky top-0 lg:hidden">
       <div className="flex items-center gap-3">
@@ -133,7 +218,29 @@ const Header = () => {
           )}
         </div>
       </div>
-      <WalletMultiButton />
+      <div className="flex items-center gap-2">
+        {connected && !isTestMode && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-ink-light">
+              {balance.toFixed(2)} USDC
+            </span>
+            <button
+              onClick={handleFaucet}
+              disabled={faucetLoading}
+              title="Get 1000 demo-USDC"
+              className="p-2 rounded-full bg-pearl hover:bg-pearl-dark text-ink-light hover:text-ink transition-colors disabled:opacity-40"
+            >
+              <Droplets size={16} />
+            </button>
+          </div>
+        )}
+        {faucetMsg && (
+          <span className="text-[10px] text-ink-light bg-pearl px-2 py-1 rounded-full whitespace-nowrap">
+            {faucetMsg}
+          </span>
+        )}
+        <WalletMultiButton />
+      </div>
     </header>
   );
 };

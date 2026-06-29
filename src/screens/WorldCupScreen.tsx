@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, Clock, AlertCircle, FlaskConical, Zap, RefreshCw, Search, X, Bell } from 'lucide-react';
 import { txOddsAdapter, Fixture, OddsOffer } from '../adapters/txodds';
+import { eventsApi } from '../adapters/eventsApi';
 import { ResultsDB } from '../adapters/resultsDb';
 import { feedback } from '../utils/feedback';
 import { useAppContext } from '../context/AppContext';
@@ -360,7 +361,7 @@ export const WorldCupScreen = () => {
               </p>
             </div>
           ) : activeTab === 'finished' && groupedFixtures ? (
-            Object.entries(groupedFixtures).map(([comp, matches]) => (
+            (Object.entries(groupedFixtures) as [string, Fixture[]][]).map(([comp, matches]) => (
               <div key={comp}>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-xs font-bold text-ink-light uppercase tracking-widest">{comp}</span>

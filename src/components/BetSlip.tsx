@@ -1,33 +1,138 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Receipt, X, Trash2, ArrowRight, Zap } from 'lucide-react';
+import { Receipt, X, Trash2, ArrowRight, Zap, Loader2, ExternalLink } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { feedback } from '../utils/feedback';
+import { useConnection, useAnchorWallet, useWallet } from '@solana/wallet-adapter-react';
+import {
+  getProgram,
+  fetchMarket,
+  initializeMarket,
+  deposit,
+  STAKE_MINT,
+  OUTCOME_HOME,
+  OUTCOME_DRAW,
+  OUTCOME_AWAY,
+} from '../lib/snaptapClient';
+import { useStakeBalance } from '../lib/useStakeBalance';
 
-const QUICK_AMOUNTS = [100, 500, 1000, 5000];
+const QUICK_AMOUNTS_TEST = [100, 500, 1000, 5000];
+const QUICK_AMOUNTS_REAL = [1, 5, 10, 50];
 
 export const BetSlip = () => {
-  const { betSlip, removeFromBetSlip, clearBetSlip, placeExpressBet, isTestMode, testBalance } = useAppContext();
+  const { betSlip, removeFromBetSlip, clearBetSlip, placeExpressBet, addBet, isTestMode, testBalance } = useAppContext();
+  const { connection } = useConnection();
+  const anchorWallet = useAnchorWallet();
+  const { connected } = useWallet();
+  const { balance: stakeBalance, refresh: refreshBalance } = useStakeBalance();
+
   const [isOpen, setIsOpen] = useState(false);
   const [amount, setAmount] = useState(isTestMode ? 100 : 10);
+  const [txLoading, setTxLoading] = useState(false);
+  const [txResult, setTxResult] = useState<{ sig: string } | null>(null);
+  const [txError, setTxError] = useState<string | null>(null);
+
+  const isRealMode = !isTestMode && connected && !!anchorWallet;
+  const isExpress = betSlip.length > 1;
 
   useEffect(() => {
     setAmount(isTestMode ? 100 : 10);
   }, [isTestMode]);
+
+  // Clear tx feedback when slip or mode changes
+  useEffect(() => {
+    setTxResult(null);
+    setTxError(null);
+  }, [betSlip, isTestMode]);
 
   if (betSlip.length === 0) return null;
 
   const totalOdds = betSlip.reduce((acc, item) => acc * item.odds, 1);
   const potentialPayout = (amount * totalOdds).toFixed(2);
   const profit = (amount * totalOdds - amount).toFixed(2);
-  const isExpress = betSlip.length > 1;
+  const QUICK_AMOUNTS = isTestMode ? QUICK_AMOUNTS_TEST : QUICK_AMOUNTS_REAL;
 
-  const canPlace = amount > 0 && !isNaN(amount) && (!isTestMode || amount <= testBalance);
+  const canPlace = amount > 0 && !isNaN(amount) && !txLoading &&
+    (!isTestMode || amount <= testBalance) &&
+    (isTestMode || !isRealMode || amount <= stakeBalance);
 
-  const handlePlaceBet = () => {
+  const handlePlaceBet = async () => {
     if (!canPlace) return;
-    placeExpressBet(amount, isTestMode ? 'TEST' : 'USDC', isTestMode);
-    setIsOpen(false);
+    setTxResult(null);
+    setTxError(null);
+
+    // Test mode OR wallet not connected: use existing express/local flow
+    if (isTestMode || !connected || !anchorWallet) {
+      placeExpressBet(amount, isTestMode ? 'TEST' : 'USDC', isTestMode);
+      setIsOpen(false);
+      return;
+    }
+
+    // Real mode with wallet
+    if (isExpress) {
+      // Multi-leg express cannot map to a single on-chain market
+      setTxError('Express bets are test-mode only. Switch to Test Mode or select a single match.');
+      return;
+    }
+
+    // Single-leg real deposit
+    const leg = betSlip[0];
+    const outcomeIndex =
+      leg.outcome === 'home' ? OUTCOME_HOME :
+      leg.outcome === 'draw' ? OUTCOME_DRAW : OUTCOME_AWAY;
+
+    setTxLoading(true);
+    try {
+      const program = getProgram(connection, anchorWallet);
+
+      // Ensure market exists
+      let marketExists = false;
+      try {
+        const m = await fetchMarket(program, leg.fixtureId);
+        marketExists = m !== null && m !== undefined;
+      } catch {
+        marketExists = false;
+      }
+
+      if (!marketExists) {
+        // Initialize market first; closeTs = match start (best-effort)
+        const closeTs = Math.floor(Date.now() / 1000) + 3600; // fallback: 1h from now
+        await initializeMarket(program, {
+          fixtureId: leg.fixtureId,
+          closeTs,
+          stakeMint: STAKE_MINT,
+        });
+      }
+
+      const sig = await deposit(program, {
+        fixtureId: leg.fixtureId,
+        outcome: outcomeIndex,
+        amount: Math.round(amount * 1e6),
+      });
+
+      feedback.playSuccess();
+      setTxResult({ sig });
+      refreshBalance();
+
+      const outcomeLabel = leg.outcome === 'home' ? leg.homeTeam : leg.outcome === 'away' ? leg.awayTeam : 'Draw';
+      addBet({
+        marketId: `wc-${leg.fixtureId}-${leg.outcome}`,
+        marketTitle: `${leg.homeTeam} vs ${leg.awayTeam} — ${outcomeLabel}`,
+        outcome: 'Yes',
+        amount,
+        currency: 'USDC',
+        potentialPayout: parseFloat(potentialPayout),
+        isTestBet: false,
+        fixtureIds: [leg.fixtureId],
+        legs: [...betSlip],
+      });
+
+      clearBetSlip();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTxError(msg.length > 120 ? msg.slice(0, 120) + '…' : msg);
+    }
+    setTxLoading(false);
   };
 
   const addQuickAmount = (val: number) => {
@@ -37,7 +142,13 @@ export const BetSlip = () => {
 
   const setMaxAmount = () => {
     feedback.playClick();
-    setAmount(isTestMode ? Math.floor(testBalance) : 1000);
+    if (isTestMode) {
+      setAmount(Math.floor(testBalance));
+    } else if (isRealMode) {
+      setAmount(Math.floor(stakeBalance));
+    } else {
+      setAmount(1000);
+    }
   };
 
   return (
@@ -147,6 +258,9 @@ export const BetSlip = () => {
                     {isTestMode && (
                       <span className="ml-2 text-ink-light/60">Balance: {testBalance.toFixed(0)}</span>
                     )}
+                    {isRealMode && !isTestMode && (
+                      <span className="ml-2 text-ink-light/60">Balance: {stakeBalance.toFixed(2)} USDC</span>
+                    )}
                   </label>
                   <input
                     type="number"
@@ -167,6 +281,7 @@ export const BetSlip = () => {
                       +{val >= 1000 ? `${val/1000}K` : val}
                     </button>
                   ))}
+
                   <button
                     onClick={setMaxAmount}
                     className="flex-1 py-1.5 text-xs font-bold bg-primary/10 hover:bg-primary/20 text-primary rounded-lg transition-colors flex items-center justify-center gap-1"
@@ -175,6 +290,13 @@ export const BetSlip = () => {
                     MAX
                   </button>
                 </div>
+
+                {/* Express warning in real mode */}
+                {isRealMode && isExpress && (
+                  <p className="text-xs text-warning bg-warning/10 rounded-xl p-3 text-center">
+                    Express bets are test-mode only. Single match deposits supported on-chain.
+                  </p>
+                )}
 
                 {/* Payout preview */}
                 <div className="bg-success/8 border border-success/15 rounded-xl p-3 flex justify-between items-center">
@@ -188,14 +310,43 @@ export const BetSlip = () => {
                   </div>
                 </div>
 
+                {/* Tx error */}
+                {txError && (
+                  <p className="text-xs text-danger bg-danger/10 rounded-xl p-3 break-all">
+                    {txError}
+                  </p>
+                )}
+
+                {/* Tx success */}
+                {txResult && (
+                  <a
+                    href={`https://explorer.solana.com/tx/${txResult.sig}?cluster=devnet`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 text-xs text-ink-light underline bg-success/8 rounded-xl p-3"
+                  >
+                    Bet confirmed — view on Explorer
+                    <ExternalLink size={12} />
+                  </a>
+                )}
+
                 {/* Place bet button */}
                 <button
                   onClick={handlePlaceBet}
                   disabled={!canPlace}
                   className="w-full bg-ink text-cream font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-ink/90 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed text-base"
                 >
-                  Place {isExpress ? 'Express' : ''} Bet — {amount} {isTestMode ? 'TEST' : 'USDC'}
-                  <ArrowRight size={18} />
+                  {txLoading ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      Sending transaction...
+                    </>
+                  ) : (
+                    <>
+                      Place {isExpress ? 'Express' : ''} Bet — {amount} {isTestMode ? 'TEST' : 'USDC'}
+                      <ArrowRight size={18} />
+                    </>
+                  )}
                 </button>
               </div>
             </motion.div>
