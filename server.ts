@@ -401,6 +401,28 @@ async function startServer() {
     }
   });
 
+  // GET /api/txline/scores/:fixtureId -> /api/scores/historical/:fixtureId
+  // Returns the full sequence of score updates for a single fixture.
+  // Used by the frontend to find the final score event (last entry) and its seq.
+  app.get("/api/txline/scores/:fixtureId", async (req, res) => {
+    try {
+      const { fixtureId } = req.params;
+      const headers = await txlineHeaders();
+      const upstream = await fetch(
+        `${TXLINE_API_BASE}/api/scores/historical/${fixtureId}`,
+        { headers }
+      );
+      const body = await upstream.json();
+      if (!upstream.ok) {
+        return res.status(upstream.status).json(body);
+      }
+      res.json(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+    }
+  });
+
   // GET /api/txline/stat-validation -> /api/scores/stat-validation
   // Used by the frontend to build the on-chain `resolve` transaction.
   // Query params forwarded: fixtureId, seq, statKey, statKey2

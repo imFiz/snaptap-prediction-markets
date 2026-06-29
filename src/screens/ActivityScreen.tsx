@@ -1,15 +1,229 @@
-import React, { useState } from 'react';
-import { Activity, TrendingUp, Award, Clock, CheckCircle2, XCircle, ChevronRight, FlaskConical, Trash2 } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { Activity, TrendingUp, Award, Clock, CheckCircle2, XCircle, ChevronRight, FlaskConical, Trash2, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useAppContext, Bet } from '../context/AppContext';
 import { AggregatorService } from '../services/AggregatorService';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection, useAnchorWallet } from '@solana/wallet-adapter-react';
 import { feedback } from '../utils/feedback';
 import { ResultsDB } from '../adapters/resultsDb';
+import {
+  getProgram,
+  claim,
+  resolve,
+  OUTCOME_HOME,
+  OUTCOME_AWAY,
+} from '../lib/snaptapClient';
+import { fetchStatValidation } from '../lib/txlineApi';
+import { useSnaptapMarket } from '../hooks/useSnaptapMarket';
+import { ResolutionReceipt } from '../components/ResolutionReceipt';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the full score sequence for a fixture and extract the final home/away
+ * goal counts plus the seq number to use for stat-validation.
+ *
+ * Strategy: use the LAST entry in the array — it represents the final state of
+ * the match after all updates have been applied. Its `seq` is the one we pass
+ * to /api/txline/stat-validation so the proof covers the definitive score.
+ *
+ * // VERIFY at runtime: the TxLINE historical endpoint returns entries in
+ * chronological order (seq ascending). If not, sort by seq before picking last.
+ */
+async function fetchFinalScore(fixtureId: number): Promise<{
+  homeGoals: number;
+  awayGoals: number;
+  seq: number;
+}> {
+  const res = await fetch(`/api/txline/scores/${fixtureId}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Scores fetch failed (${res.status}): ${body}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = (await res.json()) as any[];
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('No score events found for this fixture.');
+  }
+
+  // Pick the last event — it carries the final score.
+  // If the array is unordered, sort ascending by seq first.
+  const sorted = [...data].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  const last = sorted[sorted.length - 1];
+
+  // TxLINE soccer: Participant1 = home, Participant2 = away.
+  // Field names: scoreSoccer.Participant1.Goals / scoreSoccer.Participant2.Goals
+  // // VERIFY: actual field name casing from the live API response.
+  const soccer = last.scoreSoccer ?? last.score ?? last;
+  const homeGoals =
+    soccer?.Participant1?.Goals ??
+    soccer?.participant1?.goals ??
+    soccer?.home ??
+    0;
+  const awayGoals =
+    soccer?.Participant2?.Goals ??
+    soccer?.participant2?.goals ??
+    soccer?.away ??
+    0;
+  const seq: number = last.seq ?? last.Seq ?? 0;
+
+  return { homeGoals, awayGoals, seq };
+}
+
+/**
+ * Derive the 1X2 outcome index from final goals.
+ * 0=home win, 1=draw, 2=away win.
+ */
+function goalsToOutcome(homeGoals: number, awayGoals: number): number {
+  if (homeGoals > awayGoals) return OUTCOME_HOME;
+  if (awayGoals > homeGoals) return OUTCOME_AWAY;
+  return 1; // draw
+}
+
+/**
+ * Derive the outcome index from a bet's leg/marketId.
+ * A single-leg bet has exactly one BetSlipItem in legs[] with an 'outcome' field.
+ * Falls back to parsing the marketId suffix (-home/-draw/-away).
+ */
+function betOutcomeIndex(bet: Bet): number {
+  const legOutcome = bet.legs?.[0]?.outcome;
+  if (legOutcome === 'home') return OUTCOME_HOME;
+  if (legOutcome === 'draw') return 1;
+  if (legOutcome === 'away') return OUTCOME_AWAY;
+  // fallback from marketId suffix
+  if (bet.marketId.endsWith('-home')) return OUTCOME_HOME;
+  if (bet.marketId.endsWith('-draw')) return 1;
+  if (bet.marketId.endsWith('-away')) return OUTCOME_AWAY;
+  return OUTCOME_HOME; // safe default
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: per-bet on-chain controls (settle + receipt)
+// ---------------------------------------------------------------------------
+
+interface BetOnChainControlsProps {
+  bet: Bet;
+  onSettled: () => void;
+}
+
+const BetOnChainControls: React.FC<BetOnChainControlsProps> = ({ bet, onSettled }) => {
+  const { connection } = useConnection();
+  const anchorWallet = useAnchorWallet();
+
+  // Primary fixtureId for single-leg bets
+  const fixtureId = bet.fixtureIds?.[0] ?? bet.legs?.[0]?.fixtureId ?? null;
+
+  const { market, loading: marketLoading, refresh } = useSnaptapMarket(
+    fixtureId,
+    anchorWallet
+  );
+
+  const [settling, setSettling] = useState(false);
+  const [settleTxSig, setSettleTxSig] = useState<string | null>(null);
+  const [settleError, setSettleError] = useState<string | null>(null);
+
+  const handleSettle = useCallback(async () => {
+    if (!anchorWallet || fixtureId == null) return;
+    setSettling(true);
+    setSettleError(null);
+    setSettleTxSig(null);
+
+    try {
+      const { homeGoals, awayGoals, seq } = await fetchFinalScore(fixtureId);
+      const claimedOutcome = goalsToOutcome(homeGoals, awayGoals);
+
+      // Fetch both stat keys (1=home goals full game, 2=away goals full game) in one call
+      const validation = await fetchStatValidation({
+        fixtureId,
+        seq,
+        statKey: '1',
+        statKey2: '2',
+      });
+
+      const program = getProgram(connection, anchorWallet);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sig = await resolve(program, { fixtureId, claimedOutcome, validation: validation as any });
+
+      setSettleTxSig(sig);
+      refresh();
+      onSettled();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[SnapTap resolve] failed:', e);
+      setSettleError(msg);
+    } finally {
+      setSettling(false);
+    }
+  }, [anchorWallet, fixtureId, connection, refresh, onSettled]);
+
+  // Only show for non-test bets on a finished match whose market is not resolved yet
+  if (bet.isTestBet || fixtureId == null) return null;
+
+  const matchFinished = bet.status === 'Won' || bet.status === 'Lost' || bet.status === 'Claimed';
+  const showSettleButton = matchFinished && !marketLoading && market && !market.resolved;
+  const showReceipt = market?.resolved;
+
+  return (
+    <>
+      {showSettleButton && (
+        <div className="flex flex-col gap-2 mt-1">
+          <button
+            onClick={handleSettle}
+            disabled={settling}
+            className="w-full py-2 bg-primary/10 text-primary border border-primary/30 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-60"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            {settling ? 'Settling on-chain...' : 'Settle on-chain'}
+          </button>
+          {settleError && (
+            <div className="flex items-start gap-2 bg-danger/10 border border-danger/20 rounded-lg p-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-danger mt-0.5 shrink-0" />
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                <span className="text-[10px] font-bold text-danger uppercase">Resolve failed</span>
+                <span className="text-[10px] text-danger/80 break-all">{settleError}</span>
+                <button
+                  onClick={() => setSettleError(null)}
+                  className="text-[10px] text-ink-light underline self-start"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {settleTxSig && (
+            <a
+              href={`https://explorer.solana.com/tx/${settleTxSig}?cluster=devnet`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] font-mono text-primary underline truncate"
+            >
+              Tx: {settleTxSig.slice(0, 16)}…
+            </a>
+          )}
+        </div>
+      )}
+
+      {showReceipt && (
+        <ResolutionReceipt market={market} fixtureId={fixtureId} />
+      )}
+    </>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Main screen
+// ---------------------------------------------------------------------------
 
 export const ActivityScreen = () => {
   const { bets, claimReward, isTestMode, clearTestBets } = useAppContext();
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey } = useWallet();
+  const { connection } = useConnection();
+  const anchorWallet = useAnchorWallet();
+
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimTxSigs, setClaimTxSigs] = useState<Record<string, string>>({});
   const [betFilter, setBetFilter] = useState<'all' | 'active' | 'settled' | 'won'>('all');
 
   const displayedBets = bets.filter(bet => {
@@ -42,7 +256,7 @@ export const ActivityScreen = () => {
 
   const totalWagered = displayedBets.reduce((sum, bet) => {
     if (isTestMode) return sum + bet.amount;
-    const rate = AggregatorService.getConversionRate(bet.currency as any, 'USDC');
+    const rate = AggregatorService.getConversionRate(bet.currency as Parameters<typeof AggregatorService.getConversionRate>[0], 'USDC');
     return sum + (bet.amount * rate);
   }, 0);
 
@@ -50,7 +264,7 @@ export const ActivityScreen = () => {
     .filter(b => b.status === 'Won')
     .reduce((sum, bet) => {
       if (isTestMode) return sum + bet.potentialPayout;
-      const rate = AggregatorService.getConversionRate(bet.currency as any, 'USDC');
+      const rate = AggregatorService.getConversionRate(bet.currency as Parameters<typeof AggregatorService.getConversionRate>[0], 'USDC');
       return sum + (bet.potentialPayout * rate);
     }, 0);
 
@@ -59,27 +273,47 @@ export const ActivityScreen = () => {
   const wonCount = displayedBets.filter(b => b.status === 'Won' || b.status === 'Claimed').length;
   const winRate = resolvedCount > 0 ? Math.round((wonCount / resolvedCount) * 100) : 0;
 
+  // ---------------------------------------------------------------------------
+  // Real on-chain CLAIM
+  // ---------------------------------------------------------------------------
+
   const handleClaim = async (bet: Bet) => {
-    if (!isTestMode && (!publicKey || !signTransaction)) {
-      alert("Please connect your wallet to claim rewards.");
+    if (!isTestMode && (!publicKey || !anchorWallet)) {
+      alert('Please connect your wallet to claim rewards.');
       return;
     }
     feedback.playClick();
     setClaimingId(bet.id);
+
     try {
-      if (!isTestMode) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { base64Tx } = await AggregatorService.buildClaimTransaction(bet.id, publicKey!.toString());
+      if (isTestMode) {
+        // Test-mode: purely local claim (no chain interaction)
+        claimReward(bet.id);
+        feedback.playSuccess();
+      } else {
+        // Real on-chain claim via snaptapClient.claim()
+        const fixtureId = bet.fixtureIds?.[0] ?? bet.legs?.[0]?.fixtureId;
+        if (fixtureId == null) throw new Error('No fixtureId found on bet — cannot claim.');
+
+        const program = getProgram(connection, anchorWallet!);
+        const outcome = betOutcomeIndex(bet);
+        const sig = await claim(program, { fixtureId, outcome });
+
+        setClaimTxSigs(prev => ({ ...prev, [bet.id]: sig }));
+        claimReward(bet.id);
+        feedback.playSuccess();
       }
-      claimReward(bet.id);
-      feedback.playSuccess();
     } catch (error) {
-      console.error("Failed to claim:", error);
-      alert("Failed to claim reward. Please try again.");
+      console.error('Failed to claim:', error);
+      alert(`Failed to claim reward: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setClaimingId(null);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Display helpers
+  // ---------------------------------------------------------------------------
 
   const getStatusIcon = (status: Bet['status']) => {
     switch (status) {
@@ -108,7 +342,6 @@ export const ActivityScreen = () => {
     }
   };
 
-  // Get match score for a leg from ResultsDB
   const getLegResult = (leg: { homeTeam: string; awayTeam: string; outcome: string }) => {
     const score = ResultsDB.getScore(leg.homeTeam, leg.awayTeam);
     if (!score) return null;
@@ -301,7 +534,7 @@ export const ActivityScreen = () => {
                               <span className="text-xs text-ink font-medium">{leg.homeTeam} vs {leg.awayTeam}</span>
                               {result && (
                                 <span className="text-[10px] text-ink-light font-mono">
-                                  {result.score.home}:{result.score.away} • FT
+                                  {result.score.home}:{result.score.away} · FT
                                 </span>
                               )}
                             </div>
@@ -340,22 +573,43 @@ export const ActivityScreen = () => {
                     return null;
                   })()}
 
+                  {/* On-chain settle button + resolution receipt (non-test bets only) */}
+                  {!bet.isTestBet && (
+                    <BetOnChainControls
+                      bet={bet}
+                      onSettled={() => {/* market refresh handled inside component */}}
+                    />
+                  )}
+
                   {/* Claim Button */}
                   {bet.status === 'Won' && (
-                    <button
-                      onClick={() => handleClaim(bet)}
-                      disabled={claimingId === bet.id}
-                      className="mt-2 w-full py-2.5 bg-success text-cream rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-success/90 transition-colors disabled:opacity-70"
-                    >
-                      {claimingId === bet.id ? (
-                        <span className="animate-pulse">Processing Claim...</span>
-                      ) : (
-                        <>
-                          Claim {bet.potentialPayout.toFixed(2)} {bet.currency}
-                          <ChevronRight className="w-4 h-4" />
-                        </>
+                    <>
+                      <button
+                        onClick={() => handleClaim(bet)}
+                        disabled={claimingId === bet.id}
+                        className="mt-2 w-full py-2.5 bg-success text-cream rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-success/90 transition-colors disabled:opacity-70"
+                      >
+                        {claimingId === bet.id ? (
+                          <span className="animate-pulse">Processing Claim...</span>
+                        ) : (
+                          <>
+                            Claim {bet.potentialPayout.toFixed(2)} {bet.currency}
+                            <ChevronRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                      {/* Show tx link after successful non-test claim */}
+                      {!isTestMode && claimTxSigs[bet.id] && (
+                        <a
+                          href={`https://explorer.solana.com/tx/${claimTxSigs[bet.id]}?cluster=devnet`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-mono text-success underline truncate"
+                        >
+                          Claim tx: {claimTxSigs[bet.id].slice(0, 16)}…
+                        </a>
                       )}
-                    </button>
+                    </>
                   )}
 
                   <div className="text-[10px] text-ink-light opacity-60 mt-1">
