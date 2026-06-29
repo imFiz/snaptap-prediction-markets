@@ -3,8 +3,11 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import os from "os";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -14,6 +17,25 @@ const PORT = 4005;
 const TXLINE_API_BASE =
   process.env.TXLINE_API_BASE || "https://txline.txodds.com";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-secret";
+
+// Devnet demo-USDC faucet. The mint authority is the server's Solana keypair
+// (also the program deploy wallet). Public mint address — safe to hardcode.
+const SOLANA_RPC = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+const STAKE_MINT_ADDR =
+  process.env.VITE_STAKE_MINT || "EmoE5KS1riKrxMwap5sUAcPfw4x9SLwTj6k2Yq5B9WR";
+const FAUCET_AMOUNT = 1_000_000_000; // 1000 demo-USDC (6 decimals)
+const faucetLastClaim = new Map<string, number>();
+const FAUCET_COOLDOWN_MS = 60 * 1000;
+
+let faucetKeypair: Keypair | null = null;
+function getFaucetKeypair(): Keypair {
+  if (faucetKeypair) return faucetKeypair;
+  const keyPath =
+    process.env.SOLANA_KEYPAIR || path.join(os.homedir(), ".config", "solana", "id.json");
+  const secret = JSON.parse(fs.readFileSync(keyPath, "utf-8"));
+  faucetKeypair = Keypair.fromSecretKey(new Uint8Array(secret));
+  return faucetKeypair;
+}
 
 // NOTE: on-chain positions are the real source of truth for user balances.
 // The JSON-file endpoints below are kept for test-mode / demo only.
@@ -309,6 +331,34 @@ async function startServer() {
     );
 
     res.json({ token, pubkey });
+  });
+
+  // -------------------------------------------------------------------------
+  // Devnet demo-USDC faucet: mint stake tokens to a user so they can bet
+  // -------------------------------------------------------------------------
+
+  app.post("/api/faucet", async (req, res) => {
+    const { pubkey } = req.body as { pubkey?: string };
+    if (!pubkey || typeof pubkey !== "string") {
+      return res.status(400).json({ error: "Missing pubkey" });
+    }
+    const last = faucetLastClaim.get(pubkey) ?? 0;
+    if (Date.now() - last < FAUCET_COOLDOWN_MS) {
+      return res.status(429).json({ error: "Faucet cooldown — try again in a minute" });
+    }
+    try {
+      const conn = new Connection(SOLANA_RPC, "confirmed");
+      const authority = getFaucetKeypair();
+      const mint = new PublicKey(STAKE_MINT_ADDR);
+      const owner = new PublicKey(pubkey);
+      const ata = await getOrCreateAssociatedTokenAccount(conn, authority, mint, owner);
+      const sig = await mintTo(conn, authority, mint, ata.address, authority, FAUCET_AMOUNT);
+      faucetLastClaim.set(pubkey, Date.now());
+      res.json({ signature: sig, amount: FAUCET_AMOUNT, mint: STAKE_MINT_ADDR, ata: ata.address.toBase58() });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: "Faucet failed", detail: msg });
+    }
   });
 
   // -------------------------------------------------------------------------

@@ -38,18 +38,15 @@ export const TXLINE_PROGRAM_ID = new PublicKey(
 
 export const DEVNET_RPC = 'https://api.devnet.solana.com';
 
-// Guard: VITE_STAKE_MINT must be set in .env
+// Demo-USDC SPL mint (devnet, 6 decimals). Public address, safe to hardcode as
+// the default; can still be overridden via VITE_STAKE_MINT.
 // Cast via unknown to sidestep missing vite/client types in tsconfig (same pattern as txodds.ts)
 const _importMeta = import.meta as unknown as { env: Record<string, string | undefined> };
-const _rawMint: string | undefined = _importMeta.env['VITE_STAKE_MINT'];
-if (!_rawMint) {
-  console.warn(
-    '[SnapTap] VITE_STAKE_MINT is not set. STAKE_MINT will be a placeholder — set the env var before calling on-chain instructions.'
-  );
-}
+const DEFAULT_STAKE_MINT = 'EmoE5KS1riKrxMwap5sUAcPfw4x9SLwTj6k2Yq5B9WR';
 export const STAKE_MINT = new PublicKey(
-  _rawMint ?? '11111111111111111111111111111111' // placeholder; guarded by warning above
+  _importMeta.env['VITE_STAKE_MINT'] ?? DEFAULT_STAKE_MINT
 );
+export const STAKE_DECIMALS = 6;
 
 // Market kind byte for MatchResult1x2 (first variant = 0)
 const MARKET_KIND_BYTE_1X2 = 0;
