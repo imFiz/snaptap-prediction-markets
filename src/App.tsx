@@ -260,6 +260,7 @@ const AppContent = () => {
         <Navigation />
         <main className="flex-1 pb-24 lg:pb-0 lg:px-8 max-w-3xl mx-auto w-full">
           <Header />
+          <DevnetBanner />
           <Routes>
             <Route path="/" element={<WorldCupScreen />} />
             <Route path="/activity" element={<ActivityScreen />} />
@@ -269,6 +270,36 @@ const AppContent = () => {
         </main>
       </div>
     </Router>
+  );
+};
+
+const DevnetBanner = () => {
+  const { connected } = useWallet();
+  const { isTestMode } = useAppContext();
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem('devnetBannerDismissed') === 'true'
+  );
+  if (!connected || isTestMode || dismissed) return null;
+  return (
+    <div className="mx-6 mt-4 px-4 py-3 bg-warning/10 border border-warning/30 rounded-2xl flex items-start gap-3">
+      <FlaskConical size={16} className="text-warning mt-0.5 shrink-0" />
+      <div className="flex-1">
+        <p className="text-sm font-semibold text-warning">Solana Devnet</p>
+        <p className="text-xs text-ink-light mt-0.5">
+          SnapTap runs on Devnet. Set your wallet to Devnet (Phantom → Settings →
+          Developer Settings → Testnet Mode → Devnet), otherwise transactions will fail.
+        </p>
+      </div>
+      <button
+        onClick={() => {
+          localStorage.setItem('devnetBannerDismissed', 'true');
+          setDismissed(true);
+        }}
+        className="text-ink-light hover:text-ink text-sm font-bold shrink-0"
+      >
+        ✕
+      </button>
+    </div>
   );
 };
 
