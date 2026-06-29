@@ -40,11 +40,12 @@ export const DEVNET_RPC = 'https://api.devnet.solana.com';
 
 // Demo-USDC SPL mint (devnet, 6 decimals). Public address, safe to hardcode as
 // the default; can still be overridden via VITE_STAKE_MINT.
-// Cast via unknown to sidestep missing vite/client types in tsconfig (same pattern as txodds.ts)
-const _importMeta = import.meta as unknown as { env: Record<string, string | undefined> };
+// IMPORTANT: use the STATIC `import.meta.env.VITE_*` form. Vite only inlines
+// that exact token at build time; dynamic access (import.meta.env[key] or via a
+// variable) is NOT replaced and is `undefined` in production builds -> crash.
 const DEFAULT_STAKE_MINT = 'EmoE5KS1riKrxMwap5sUAcPfw4x9SLwTj6k2Yq5B9WR';
 export const STAKE_MINT = new PublicKey(
-  _importMeta.env['VITE_STAKE_MINT'] ?? DEFAULT_STAKE_MINT
+  import.meta.env.VITE_STAKE_MINT || DEFAULT_STAKE_MINT
 );
 export const STAKE_DECIMALS = 6;
 
