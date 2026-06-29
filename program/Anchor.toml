@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-snaptap_settlement = "11111111111111111111111111111111"
+snaptap_settlement = "Fg8kWSCZPGjvFWzxEx4J7u5kxKFGBf3oT2akJfri4Yae"
 
 [registry]
 url = "https://api.apr.dev"

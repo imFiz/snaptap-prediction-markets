@@ -25,7 +25,7 @@ use anchor_lang::solana_program::program::{get_return_data, invoke};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("11111111111111111111111111111111");
+declare_id!("Fg8kWSCZPGjvFWzxEx4J7u5kxKFGBf3oT2akJfri4Yae");
 
 /// TxLINE prediction-data program (devnet). Swap for mainnet at deploy time.
 pub const TXLINE_PROGRAM_ID: Pubkey = pubkey!("6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J");
