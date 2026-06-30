@@ -33,29 +33,34 @@ const DesktopWalletPanel = () => {
         body: JSON.stringify({ pubkey: publicKey.toString() }),
       });
       if (res.status === 429) {
-        setFaucetMsg('Faucet cooldown');
+        setFaucetMsg('Faucet cooldown, wait a minute');
       } else if (res.ok) {
         setFaucetMsg('1000 demo-USDC sent!');
-        setTimeout(refresh, 2000);
+        refresh();
+        setTimeout(refresh, 2500);
+        setTimeout(refresh, 6000);
       } else {
-        setFaucetMsg('Faucet error');
+        const err = await res.json().catch(() => ({}));
+        setFaucetMsg(err.error || `Faucet error (${res.status})`);
       }
-    } catch {
-      setFaucetMsg('Network error');
+    } catch (e) {
+      setFaucetMsg('Network error: ' + (e instanceof Error ? e.message : String(e)));
     }
     setFaucetLoading(false);
-    setTimeout(() => setFaucetMsg(null), 4000);
+    setTimeout(() => setFaucetMsg(null), 6000);
   };
 
   return (
     <div className="mt-auto desktop-wallet flex flex-col gap-2">
-      {connected && !isTestMode && (
+      {!isTestMode && (
         <div className="flex items-center justify-between px-1">
-          <span className="text-xs font-mono text-ink-light">{balance.toFixed(2)} USDC</span>
+          <span className="text-xs font-mono text-ink-light">
+            {connected ? `${balance.toFixed(2)} USDC` : 'Connect wallet'}
+          </span>
           <button
             onClick={handleFaucet}
-            disabled={faucetLoading}
-            title="Get 1000 demo-USDC"
+            disabled={faucetLoading || !connected}
+            title={connected ? 'Get 1000 demo-USDC' : 'Connect a wallet first'}
             className="p-1.5 rounded-full bg-pearl hover:bg-pearl-dark text-ink-light hover:text-ink transition-colors disabled:opacity-40 flex items-center gap-1 text-xs"
           >
             <Droplets size={14} />
@@ -191,15 +196,18 @@ const Header = () => {
         body: JSON.stringify({ pubkey: publicKey.toString() }),
       });
       if (res.status === 429) {
-        setFaucetMsg('Faucet cooldown — try again later');
+        setFaucetMsg('Faucet cooldown, wait a minute');
       } else if (res.ok) {
         setFaucetMsg('1000 demo-USDC sent!');
-        setTimeout(refresh, 2000);
+        refresh();
+        setTimeout(refresh, 2500);
+        setTimeout(refresh, 6000);
       } else {
-        setFaucetMsg('Faucet error, try again');
+        const err = await res.json().catch(() => ({}));
+        setFaucetMsg(err.error || `Faucet error (${res.status})`);
       }
-    } catch {
-      setFaucetMsg('Network error');
+    } catch (e) {
+      setFaucetMsg('Network error: ' + (e instanceof Error ? e.message : String(e)));
     }
     setFaucetLoading(false);
     setTimeout(() => setFaucetMsg(null), 4000);
