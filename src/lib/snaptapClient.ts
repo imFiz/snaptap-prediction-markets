@@ -36,7 +36,10 @@ export const TXLINE_PROGRAM_ID = new PublicKey(
   '6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J'
 );
 
-export const DEVNET_RPC = 'https://api.devnet.solana.com';
+export const DEVNET_RPC =
+  typeof window !== 'undefined'
+    ? `${window.location.origin}/api/rpc`
+    : 'https://api.devnet.solana.com';
 
 // Demo-USDC SPL mint (devnet, 6 decimals). Public address, safe to hardcode as
 // the default; can still be overridden via VITE_STAKE_MINT.

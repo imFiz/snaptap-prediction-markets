@@ -363,6 +363,27 @@ async function startServer() {
   });
 
   // -------------------------------------------------------------------------
+  // Solana RPC proxy -> devnet. Routing all RPC through the server avoids the
+  // public devnet endpoint's per-browser-IP rate limits AND guarantees every
+  // transaction is submitted to DEVNET (the wallet only signs; the app sends).
+  // -------------------------------------------------------------------------
+
+  app.post("/api/rpc", async (req, res) => {
+    try {
+      const upstream = await fetch(SOLANA_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+      const text = await upstream.text();
+      res.status(upstream.status).type("application/json").send(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "RPC proxy failed", detail: msg });
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // TxLINE proxy endpoints (public read — no auth required)
   // -------------------------------------------------------------------------
 

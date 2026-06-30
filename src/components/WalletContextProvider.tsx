@@ -5,11 +5,16 @@ import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adap
 import { clusterApiUrl } from '@solana/web3.js';
 
 export const WalletContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
-    // Can be set to 'devnet', 'testnet', or 'mainnet-beta'
     const network = 'devnet';
 
-    // You can also provide a custom RPC endpoint
-    const endpoint = useMemo(() => clusterApiUrl(network), [network]);
+    // HTTP RPC goes through our backend proxy (/api/rpc -> devnet): avoids the
+    // public devnet endpoint's per-IP rate limits and guarantees every
+    // transaction the app submits lands on DEVNET. WS subscriptions go direct
+    // to the devnet websocket (read-only, optional).
+    const endpoint = useMemo(() => {
+        if (typeof window !== 'undefined') return `${window.location.origin}/api/rpc`;
+        return clusterApiUrl(network);
+    }, [network]);
 
     const wallets = useMemo(
         () => [
@@ -21,7 +26,10 @@ export const WalletContextProvider: FC<{ children: ReactNode }> = ({ children })
     );
 
     return (
-        <ConnectionProvider endpoint={endpoint}>
+        <ConnectionProvider
+            endpoint={endpoint}
+            config={{ commitment: 'confirmed', wsEndpoint: 'wss://api.devnet.solana.com/' }}
+        >
             <WalletProvider wallets={wallets} autoConnect>
                 <WalletModalProvider>
                     {children}

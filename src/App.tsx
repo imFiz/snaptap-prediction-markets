@@ -314,11 +314,11 @@ const DevnetBanner = () => {
     <div className="mx-6 mt-4 px-4 py-3 bg-warning/10 border border-warning/30 rounded-2xl flex items-start gap-3">
       <FlaskConical size={16} className="text-warning mt-0.5 shrink-0" />
       <div className="flex-1">
-        <p className="text-sm font-semibold text-warning">Switch to Solana Devnet</p>
+        <p className="text-sm font-semibold text-warning">Devnet app — your funds are safe</p>
         <p className="text-xs text-ink-light mt-0.5">
           {state === 'manual'
-            ? 'Your wallet did not switch automatically. Open Phantom → Settings → Developer Settings → Testnet Mode → Devnet, or try again below.'
-            : 'SnapTap runs on Devnet. Approve the network switch in your wallet so transactions succeed.'}
+            ? 'Your wallet does not support auto network-switch. No problem: SnapTap always submits transactions to Devnet, so your mainnet balance can never be touched. For a cleaner preview, switch your wallet to Devnet (Phantom → Settings → Developer Settings → Testnet Mode → Devnet).'
+            : 'SnapTap runs on Solana Devnet. Every transaction is sent to Devnet by the app — your mainnet funds are never at risk.'}
         </p>
         <button
           onClick={trySwitch}
