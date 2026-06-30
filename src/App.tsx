@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { WorldCupScreen } from './screens/WorldCupScreen';
 import { SettingsHub } from './screens/SettingsHub';
@@ -13,6 +13,7 @@ import { feedback } from './utils/feedback';
 import { TermsModal, UsernameModal } from './components/OnboardingModals';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useStakeBalance } from './lib/useStakeBalance';
+import { useDevnetSwitch } from './lib/useDevnetSwitch';
 
 const DesktopWalletPanel = () => {
   const { isTestMode } = useAppContext();
@@ -276,25 +277,51 @@ const AppContent = () => {
 const DevnetBanner = () => {
   const { connected } = useWallet();
   const { isTestMode } = useAppContext();
-  const [dismissed, setDismissed] = useState(
-    () => localStorage.getItem('devnetBannerDismissed') === 'true'
-  );
-  if (!connected || isTestMode || dismissed) return null;
+  const { switchToDevnet } = useDevnetSwitch();
+  const [dismissed, setDismissed] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  // 'idle' | 'ok' | 'manual' (wallet couldn't switch -> show manual steps)
+  const [state, setState] = useState<'idle' | 'ok' | 'manual'>('idle');
+
+  const trySwitch = async () => {
+    setSwitching(true);
+    const ok = await switchToDevnet();
+    setSwitching(false);
+    setState(ok ? 'ok' : 'manual');
+    if (ok) setTimeout(() => setDismissed(true), 1500);
+  };
+
+  // Auto-offer the network switch once, right after the wallet connects.
+  useEffect(() => {
+    if (!connected || isTestMode) return;
+    if (sessionStorage.getItem('devnetSwitchTried') === 'true') return;
+    sessionStorage.setItem('devnetSwitchTried', 'true');
+    trySwitch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, isTestMode]);
+
+  if (!connected || isTestMode || dismissed || state === 'ok') return null;
+
   return (
     <div className="mx-6 mt-4 px-4 py-3 bg-warning/10 border border-warning/30 rounded-2xl flex items-start gap-3">
       <FlaskConical size={16} className="text-warning mt-0.5 shrink-0" />
       <div className="flex-1">
-        <p className="text-sm font-semibold text-warning">Solana Devnet</p>
+        <p className="text-sm font-semibold text-warning">Switch to Solana Devnet</p>
         <p className="text-xs text-ink-light mt-0.5">
-          SnapTap runs on Devnet. Set your wallet to Devnet (Phantom → Settings →
-          Developer Settings → Testnet Mode → Devnet), otherwise transactions will fail.
+          {state === 'manual'
+            ? 'Your wallet did not switch automatically. Open Phantom → Settings → Developer Settings → Testnet Mode → Devnet, or try again below.'
+            : 'SnapTap runs on Devnet. Approve the network switch in your wallet so transactions succeed.'}
         </p>
+        <button
+          onClick={trySwitch}
+          disabled={switching}
+          className="mt-2 text-xs font-bold bg-warning text-cream px-3 py-1.5 rounded-lg hover:bg-warning/90 disabled:opacity-60"
+        >
+          {switching ? 'Requesting…' : 'Switch to Devnet'}
+        </button>
       </div>
       <button
-        onClick={() => {
-          localStorage.setItem('devnetBannerDismissed', 'true');
-          setDismissed(true);
-        }}
+        onClick={() => setDismissed(true)}
         className="text-ink-light hover:text-ink text-sm font-bold shrink-0"
       >
         ✕
