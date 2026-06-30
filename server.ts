@@ -387,16 +387,82 @@ async function startServer() {
   // TxLINE proxy endpoints (public read — no auth required)
   // -------------------------------------------------------------------------
 
-  // GET /api/txline/fixtures -> /api/fixtures/snapshot
-  app.get("/api/txline/fixtures", async (_req, res) => {
+  // GET /api/txline/fixtures -> the FULL World Cup schedule (past + live + upcoming).
+  // The snapshot only returns fixtures within 30 days AFTER `startEpochDay`, so we
+  // merge windows covering the whole tournament and filter to the World Cup
+  // (competitionId 72). Cached briefly so the upstream isn't hammered.
+  const WC_COMPETITION_ID = "72";
+  const WC_START_EPOCH_DAYS = [20600, 20630]; // ~Jun 10 and ~Jul 10 2026 windows
+  let fixturesCache: { ts: number; data: unknown[] } | null = null;
+  const FIXTURES_TTL = 60 * 1000;
+
+  app.get("/api/txline/fixtures", async (req, res) => {
+    try {
+      if (fixturesCache && Date.now() - fixturesCache.ts < FIXTURES_TTL) {
+        return res.json(fixturesCache.data);
+      }
+      const headers = await txlineHeaders();
+      const compId = (req.query.competitionId as string) || WC_COMPETITION_ID;
+      const byId = new Map<number, Record<string, unknown>>();
+      for (const sed of WC_START_EPOCH_DAYS) {
+        const url = `${TXLINE_API_BASE}/api/fixtures/snapshot?competitionId=${compId}&startEpochDay=${sed}`;
+        const up = await fetch(url, { headers });
+        if (!up.ok) continue;
+        const arr = await up.json();
+        if (Array.isArray(arr)) for (const f of arr) byId.set(f.FixtureId as number, f);
+      }
+      const merged = [...byId.values()].sort(
+        (a, b) => (a.StartTime as number) - (b.StartTime as number)
+      );
+      if (merged.length > 0) {
+        fixturesCache = { ts: Date.now(), data: merged };
+        return res.json(merged);
+      }
+      // Fallback: the plain latest snapshot.
+      const up = await fetch(`${TXLINE_API_BASE}/api/fixtures/snapshot`, { headers });
+      return res.json(await up.json());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+    }
+  });
+
+  // GET /api/txline/score/:fixtureId -> parsed final/live score for one fixture.
+  const scoreCache = new Map<string, { ts: number; data: unknown }>();
+  const SCORE_TTL = 30 * 1000;
+
+  app.get("/api/txline/score/:fixtureId", async (req, res) => {
+    const { fixtureId } = req.params;
+    const cached = scoreCache.get(fixtureId);
+    if (cached && Date.now() - cached.ts < SCORE_TTL) return res.json(cached.data);
     try {
       const headers = await txlineHeaders();
-      const upstream = await fetch(`${TXLINE_API_BASE}/api/fixtures/snapshot`, { headers });
-      const body = await upstream.json();
-      if (!upstream.ok) {
-        return res.status(upstream.status).json(body);
+      const up = await fetch(`${TXLINE_API_BASE}/api/scores/snapshot/${fixtureId}`, { headers });
+      if (!up.ok) return res.status(up.status).json({ fixtureId: Number(fixtureId), hasScore: false });
+      const events = await up.json();
+      let result: Record<string, unknown> = { fixtureId: Number(fixtureId), hasScore: false, home: null, away: null };
+      if (Array.isArray(events) && events.length) {
+        const sorted = events.slice().sort(
+          (a, b) => ((a.Seq ?? a.Ts ?? 0) as number) - ((b.Seq ?? b.Ts ?? 0) as number)
+        );
+        const last = sorted[sorted.length - 1] as any;
+        const p1 = last?.Score?.Participant1?.Total?.Goals;
+        const p2 = last?.Score?.Participant2?.Total?.Goals;
+        const p1IsHome = last?.Participant1IsHome !== false;
+        const g1 = typeof p1 === "number" ? p1 : 0;
+        const g2 = typeof p2 === "number" ? p2 : 0;
+        result = {
+          fixtureId: Number(fixtureId),
+          hasScore: typeof p1 === "number" || typeof p2 === "number",
+          home: p1IsHome ? g1 : g2,
+          away: p1IsHome ? g2 : g1,
+          statusId: last?.StatusId ?? null,
+          clockSeconds: last?.Clock?.Seconds ?? null,
+          startTime: last?.StartTime ?? null,
+        };
       }
-      res.json(body);
+      scoreCache.set(fixtureId, { ts: Date.now(), data: result });
+      res.json(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(502).json({ error: "Upstream fetch failed", detail: msg });
